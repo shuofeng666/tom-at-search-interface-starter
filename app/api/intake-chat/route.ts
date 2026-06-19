@@ -27,11 +27,7 @@ const fallbackNeedProfile: NeedProfile = {
   mustAvoid: [],
   safetyConcerns: [],
   preferences: [],
-  unknowns: [
-    "what activity the person wants to do",
-    "what makes the activity difficult",
-    "where the solution will be used"
-  ],
+  unknowns: [],
   searchDirections: []
 };
 
@@ -48,8 +44,23 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
-    if (!messages.length || !apiKey) {
-      return NextResponse.json(makeFallbackResponse(currentNeedProfile));
+    if (!apiKey) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing GEMINI_API_KEY or GOOGLE_API_KEY. Add it to .env.local and restart npm run dev."
+        },
+        { status: 500 }
+      );
+    }
+
+    if (!messages.length) {
+      return NextResponse.json(
+        {
+          error: "No intake messages were provided."
+        },
+        { status: 400 }
+      );
     }
 
     const response = await callGemini({
@@ -62,7 +73,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(response);
   } catch (error) {
     console.error("intake-chat error", error);
-    return NextResponse.json(makeFallbackResponse(fallbackNeedProfile));
+
+    return NextResponse.json(
+      {
+        error:
+          "Gemini intake request failed. This usually means the server cannot reach the Gemini API endpoint. Check network/VPN/proxy, API key, and model name."
+      },
+      { status: 502 }
+    );
   }
 }
 
@@ -94,64 +112,75 @@ async function callGemini({
     }))
   ];
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      contents,
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json"
-      }
-    })
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
 
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("Gemini intake error", text);
-    return makeFallbackResponse(currentNeedProfile);
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents,
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: "application/json"
+        }
+      })
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Gemini API returned ${res.status}: ${text}`);
+    }
+
+    const data = (await res.json()) as GeminiResponse;
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const parsed = safeParseJson(rawText);
+
+    return normalizeIntakeResponse(parsed, currentNeedProfile);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const data = (await res.json()) as GeminiResponse;
-  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  const parsed = safeParseJson(rawText);
-
-  return normalizeIntakeResponse(parsed, currentNeedProfile);
 }
 
 function buildSystemPrompt(currentNeedProfile: NeedProfile) {
   return `
 You are the first-screen intake agent for a TOM assistive technology search interface.
 
-Your job:
-- Talk to a Need-Knower, customer, or TOM team member who is describing an assistive technology need.
-- Ask only useful follow-up questions.
-- Do not show internal evaluation.
-- Do not recommend projects yet.
-- Do not mention scores, ranking, TOM internal review, or candidate cards.
-- Do not ask for name unless it is genuinely necessary.
-- Do not ask a long checklist.
-- Ask one concise follow-up question at a time.
-- When the need is specific enough for an initial project search, set readyForInternalSearch to true.
+You are talking to a Need-Knower, customer, caregiver, or TOM team member who is describing an assistive technology need.
 
-Useful information:
+Your job:
+- Understand the practical need.
+- Ask useful follow-up questions.
+- Do not show internal project evaluation.
+- Do not recommend projects yet.
+- Do not mention ranking, scores, candidate cards, or TOM internal review.
+- Do not ask for name unless necessary.
+- Do not ask a long checklist.
+- Ask at most one concise follow-up question at a time.
+- If the user writes in Chinese, answer in Chinese.
+- If the user writes in Hebrew, answer in Hebrew.
+- Otherwise answer in English.
+
+Collect these fields:
 - activity: what the person wants to do
-- problem: what is difficult
+- problem: what makes it difficult
 - userContext: body ability, mobility device, caregiver involvement, relevant constraints
 - environment: where it is used
 - mustHave: requirements the solution must satisfy
-- mustAvoid: things the solution should not require or do
+- mustAvoid: things the solution should avoid
 - safetyConcerns: possible risk areas
-- preferences: cost, portability, cleaning, materials, DIY preference, location
-- unknowns: missing information that would help later
+- preferences: portability, cleaning, cost, location, DIY preference, materials
+- unknowns: useful missing information
 - searchDirections: possible search phrases for TOM/internal/external search
 
 Current Need Profile:
 ${JSON.stringify(currentNeedProfile, null, 2)}
 
-Return ONLY valid JSON with this shape:
+Return ONLY valid JSON with this exact shape:
 {
   "assistantMessage": "one short natural response to the user",
   "needProfile": {
@@ -172,18 +201,25 @@ Return ONLY valid JSON with this shape:
   "suggestedReplies": ["string"]
 }
 
-Decision rule:
-Set readyForInternalSearch to true when you know:
+Set readyForInternalSearch to true when the system knows:
 - the activity,
 - the main difficulty,
 - at least one user/context constraint,
-- at least one must-have or must-avoid criterion.
+- at least one concrete search or design criterion.
 
-Style:
-- Natural and direct.
-- No long introduction.
-- No numbered workflow.
-- No internal TOM jargon in assistantMessage.
+The intake does not need to be perfect. Once there is enough information for an initial search, stop asking more questions and prepare a short handoff.
+
+Examples:
+
+User: "我左腿断了"
+You should not repeat "what activity do you want to do" forever.
+You should infer userContext includes "left leg amputation" and ask one useful follow-up:
+"你主要想解决哪类活动里的困难？比如走路、上下楼、洗澡、穿衣，还是运动？"
+
+User: "就是走路"
+Now activity is walking, problem is mobility difficulty, userContext is left leg amputation. This is enough for initial search.
+Set readyForInternalSearch to true.
+assistantMessage should summarize briefly and say it can start looking for related projects.
 `;
 }
 
@@ -197,7 +233,7 @@ function normalizeIntakeResponse(
   const assistantMessage =
     typeof value.assistantMessage === "string" && value.assistantMessage.trim()
       ? value.assistantMessage.trim()
-      : "Can you tell me a bit more about what makes this activity difficult?";
+      : "我需要再确认一个关键信息：你主要想解决哪个日常活动里的困难？";
 
   const needProfile = normalizeNeedProfile(value.needProfile || previousProfile);
 
@@ -207,10 +243,10 @@ function normalizeIntakeResponse(
       : inferReadyForSearch(needProfile);
 
   const handoffReason =
-    typeof value.handoffReason === "string"
-      ? value.handoffReason
+    typeof value.handoffReason === "string" && value.handoffReason.trim()
+      ? value.handoffReason.trim()
       : readyForInternalSearch
-        ? "I have enough information to start looking for related TOM projects and references."
+        ? buildDefaultHandoffReason(needProfile)
         : "";
 
   const missingInformation = normalizeStringArray(value.missingInformation);
@@ -256,26 +292,16 @@ function inferReadyForSearch(profile: NeedProfile) {
   const hasActivity = Boolean(profile.activity && profile.activity !== "unknown activity");
   const hasProblem = Boolean(profile.problem && profile.problem !== "unknown problem");
   const hasContext = profile.userContext.length > 0 || profile.environment.length > 0;
-  const hasCriteria = profile.mustHave.length > 0 || profile.mustAvoid.length > 0;
+  const hasCriteria =
+    profile.mustHave.length > 0 ||
+    profile.mustAvoid.length > 0 ||
+    profile.searchDirections.length > 0;
 
   return hasActivity && hasProblem && hasContext && hasCriteria;
 }
 
-function makeFallbackResponse(profile: NeedProfile): IntakeChatResponse {
-  const ready = inferReadyForSearch(profile);
-
-  return {
-    assistantMessage: ready
-      ? "I have enough information to start looking for related projects. You can add more details, or I can start the search now."
-      : "Can you describe what activity you want to do and what makes it difficult right now?",
-    needProfile: profile,
-    readyForInternalSearch: ready,
-    handoffReason: ready
-      ? "I have enough information to start looking for related TOM projects and references."
-      : "",
-    missingInformation: profile.unknowns,
-    suggestedReplies: []
-  };
+function buildDefaultHandoffReason(profile: NeedProfile) {
+  return `我现在理解的是：你想解决“${profile.activity}”中的困难，主要问题是“${profile.problem}”。我可以基于这些信息开始搜索相关项目。`;
 }
 
 function normalizeStringArray(input: unknown): string[] {

@@ -57,50 +57,72 @@ const [error, setError] = useState<string | null>(null);
     [candidates, selectedCandidateId]
   );
 
-  async function sendIntakeMessage(content?: string) {
-    const text = (content ?? draft).trim();
-    if (!text) return;
+async function sendIntakeMessage(content?: string) {
+  const text = (content ?? draft).trim();
+  if (!text) return;
 
-    const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: text
+  const userMessage: ChatMessage = {
+    id: `user-${Date.now()}`,
+    role: "user",
+    content: text
+  };
+
+  const nextMessages = [...messages, userMessage];
+  setMessages(nextMessages);
+  setDraft("");
+  setLoading("asking follow-up");
+  setError(null);
+
+  try {
+    const res = await fetch("/api/intake-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: nextMessages,
+        currentNeedProfile: needProfile
+      })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || "Intake agent failed.");
+    }
+
+    const intakeData = data as IntakeChatResponse;
+
+    const assistantMessage: ChatMessage = {
+      id: `assistant-${Date.now()}`,
+      role: "assistant",
+      content: intakeData.assistantMessage
     };
 
-    const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
-    setDraft("");
-    setLoading("asking follow-up");
+    setMessages([...nextMessages, assistantMessage]);
+    setNeedProfile(intakeData.needProfile);
+    setReadyForSearch(intakeData.readyForInternalSearch);
+    setHandoffReason(intakeData.handoffReason);
+    setMissingInformation(intakeData.missingInformation || []);
+    setSuggestedReplies(intakeData.suggestedReplies || []);
+  } catch (err) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : "The intake agent failed.";
 
-    try {
-      const res = await fetch("/api/intake-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: nextMessages,
-          currentNeedProfile: needProfile
-        })
-      });
-
-      const data = (await res.json()) as IntakeChatResponse;
-
-      const assistantMessage: ChatMessage = {
-        id: `assistant-${Date.now()}`,
+    setError(message);
+    setMessages([
+      ...nextMessages,
+      {
+        id: `assistant-error-${Date.now()}`,
         role: "assistant",
-        content: data.assistantMessage
-      };
-
-      setMessages([...nextMessages, assistantMessage]);
-      setNeedProfile(data.needProfile);
-      setReadyForSearch(data.readyForInternalSearch);
-      setHandoffReason(data.handoffReason);
-      setMissingInformation(data.missingInformation || []);
-      setSuggestedReplies(data.suggestedReplies || []);
-    } finally {
-      setLoading(null);
-    }
+        content:
+          "The intake agent could not connect right now. Please check the Gemini API connection and try again."
+      }
+    ]);
+  } finally {
+    setLoading(null);
   }
-
+}
 async function startSearch(customQuery?: string) {
   setLoading("searching projects");
   setError(null);
@@ -217,16 +239,18 @@ async function startSearch(customQuery?: string) {
       {error && <div className="errorBanner">{error}</div>}
 
       {stage === "intake" && (
-        <IntakeScreen
-          messages={messages}
-          draft={draft}
-          setDraft={setDraft}
-          onSubmit={sendIntakeMessage}
-          readyForSearch={readyForSearch}
-          handoffReason={handoffReason}
-          suggestedReplies={suggestedReplies}
-          onStartSearch={() => startSearch()}
-        />
+<IntakeScreen
+  messages={messages}
+  draft={draft}
+  setDraft={setDraft}
+  onSubmit={sendIntakeMessage}
+  readyForSearch={readyForSearch}
+  handoffReason={handoffReason}
+  suggestedReplies={suggestedReplies}
+  needProfile={needProfile}
+  missingInformation={missingInformation}
+  onStartSearch={() => startSearch()}
+/>
       )}
 
       {stage === "review" && (
@@ -267,6 +291,8 @@ function IntakeScreen({
   readyForSearch,
   handoffReason,
   suggestedReplies,
+  needProfile,
+  missingInformation,
   onStartSearch
 }: {
   messages: ChatMessage[];
@@ -276,6 +302,8 @@ function IntakeScreen({
   readyForSearch: boolean;
   handoffReason: string;
   suggestedReplies: string[];
+  needProfile: NeedProfile;
+  missingInformation: string[];
   onStartSearch: () => void;
 }) {
   function handleSubmit(event: FormEvent) {
@@ -355,17 +383,53 @@ function IntakeScreen({
         </form>
       </div>
 
-      {readyForSearch && (
-        <div className="handoffBar">
-          <p>
-            {handoffReason ||
-              "I have enough information to start looking for related TOM projects and references."}
-          </p>
-          <button className="sendBtn" onClick={onStartSearch}>
-            Search related projects
-          </button>
+{readyForSearch && (
+  <div className="handoffSummary">
+    <div>
+      <p className="summaryLabel">Ready to search</p>
+
+      <p className="summaryText">
+        {handoffReason ||
+          `I understand the need as: ${needProfile.activity} — ${needProfile.problem}`}
+      </p>
+
+      <div className="summaryGrid">
+        <div>
+          <b>Activity</b>
+          <span>{needProfile.activity || "not specified"}</span>
         </div>
+
+        <div>
+          <b>Problem</b>
+          <span>{needProfile.problem || "not specified"}</span>
+        </div>
+
+        <div>
+          <b>User context</b>
+          <span>{needProfile.userContext.join(", ") || "not specified"}</span>
+        </div>
+
+        <div>
+          <b>Search directions</b>
+          <span>
+            {needProfile.searchDirections.slice(0, 4).join(", ") ||
+              "to be generated"}
+          </span>
+        </div>
+      </div>
+
+      {missingInformation.length > 0 && (
+        <p className="missingText">
+          Useful to confirm later: {missingInformation.slice(0, 4).join(", ")}
+        </p>
       )}
+    </div>
+
+    <button className="sendBtn" onClick={onStartSearch}>
+      Search related projects
+    </button>
+  </div>
+)}
     </section>
   );
 }
