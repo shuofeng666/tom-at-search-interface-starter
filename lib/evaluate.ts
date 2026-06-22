@@ -76,11 +76,46 @@ async function evaluateSingleResult({
     url,
     source,
     sourceType,
-    image: result.image,
+    image: pickImage(result),
     summary: result.summary || result.highlights?.join(" ") || trimText(rawText, 420),
     rawText,
     evaluation
   };
+}
+
+// Prefer the page's social preview image (og:image). If there isn't one,
+// fall back to the first usable in-page image from Exa's imageLinks, while
+// skipping tiny badges/shields/icons that READMEs commonly start with.
+function pickImage(result: ExaSearchResult): string | undefined {
+  if (result.image && isUsableImage(result.image)) {
+    return result.image;
+  }
+
+  const links = result.extras?.imageLinks || [];
+  const usable = links.find((link) => isUsableImage(link));
+
+  return usable || result.image || links[0];
+}
+
+function isUsableImage(url: string): boolean {
+  if (!url) return false;
+
+  const lower = url.toLowerCase();
+
+  const looksLikeBadge =
+    lower.includes("shields.io") ||
+    lower.includes("img.shields") ||
+    lower.includes("/badge") ||
+    lower.includes("badgen.net") ||
+    lower.includes("badge.fury") ||
+    lower.includes("travis-ci") ||
+    lower.includes("circleci.com") ||
+    lower.includes("codecov.io") ||
+    lower.includes("sponsor") ||
+    lower.endsWith(".svg") ||
+    lower.includes(".svg?");
+
+  return !looksLikeBadge;
 }
 
 function buildEvaluationPrompt({

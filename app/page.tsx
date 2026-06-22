@@ -30,6 +30,12 @@ const rejectionOptions = [
   { value: "poor-documentation", label: "documentation is incomplete" }
 ];
 
+function scoreTone(score: number): "good" | "warn" | "bad" {
+  if (score >= 2.4) return "good";
+  if (score >= 1.5) return "warn";
+  return "bad";
+}
+
 export default function Home() {
   const [stage, setStage] = useState<Stage>("intake");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -505,6 +511,7 @@ function ReviewScreen({
 
         <section className="panel resultsPanel">
           <h2>Related projects</h2>
+          <p className="small resultsHint">Sorted by score, highest first. Tap a card for details.</p>
 
           <div className="candidateList">
             {candidates.map((candidate) => (
@@ -671,29 +678,50 @@ function CandidateRow({
   onToggleComparison: () => void;
 }) {
   const evaluation = candidate.evaluation;
+  const tone = scoreTone(evaluation.overallScore);
 
   return (
-    <article className={active ? "candidateRow active" : "candidateRow"} onClick={onSelect}>
-      <div className="candidateMain">
-        <div className="chips">
-          <span className="chip blue">{candidate.sourceType}</span>
-          <span className="chip">score {evaluation.overallScore}</span>
-          {candidate.rejected && <span className="chip bad">rejected</span>}
-        </div>
-
-        <h3>{candidate.title}</h3>
-        <p>{candidate.summary}</p>
+    <article
+      className={active ? "projectCard active" : "projectCard"}
+      onClick={onSelect}
+    >
+      <div className="cardMedia">
+        {candidate.image ? (
+          <img src={candidate.image} alt="" loading="lazy" />
+        ) : (
+          <div className="cardMediaFallback">{candidate.sourceType}</div>
+        )}
+        <span className={`scoreBadge ${tone}`}>{evaluation.overallScore.toFixed(1)}</span>
+        {candidate.rejected && <span className="cardRejected">rejected</span>}
       </div>
 
-      <button
-        className={selected ? "saveBtn selected" : "saveBtn"}
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggleComparison();
-        }}
-      >
-        {selected ? "Saved" : "Save"}
-      </button>
+      <div className="cardBody">
+        <span className="cardType">{candidate.sourceType}</span>
+        <h3 className="cardTitle">{candidate.title}</h3>
+        <p className="cardTeaser">{candidate.summary}</p>
+
+        <div className="cardFoot">
+          <a
+            className="openLink"
+            href={candidate.url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => event.stopPropagation()}
+          >
+            Open ↗
+          </a>
+
+          <button
+            className={selected ? "saveBtn selected" : "saveBtn"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleComparison();
+            }}
+          >
+            {selected ? "Saved" : "Save"}
+          </button>
+        </div>
+      </div>
     </article>
   );
 }
@@ -711,21 +739,26 @@ function CandidateDetail({
 }) {
   const [reason, setReason] = useState(rejectionOptions[0].value);
   const evaluation = candidate.evaluation;
+  const tone = scoreTone(evaluation.overallScore);
 
   return (
     <article className="candidateDetail">
-      <div className="chips">
-        <span className="chip blue">{candidate.sourceType}</span>
-        <span className="chip">score {evaluation.overallScore}</span>
-        <span className="chip warn">{evaluation.pathway}</span>
+      <div className="detailHead">
+        <span className="cardType">{candidate.sourceType}</span>
+        <span className={`scoreBadge ${tone}`}>{evaluation.overallScore.toFixed(1)} / 3</span>
       </div>
 
       <h2>{candidate.title}</h2>
-      <p className="cardSummary">{candidate.summary}</p>
 
-      <a className="sourceLink" href={candidate.url} target="_blank" rel="noreferrer">
-        {candidate.source}
+      <a className="openOriginal" href={candidate.url} target="_blank" rel="noreferrer">
+        Open original ↗
       </a>
+
+      {candidate.image && (
+        <img className="detailThumb" src={candidate.image} alt="" loading="lazy" />
+      )}
+
+      <span className="chip warn detailPathway">{evaluation.pathway}</span>
 
       <div className="scoreGrid">
         <ScoreBox label="Fit" value={evaluation.functionalFit.score} />
@@ -736,27 +769,34 @@ function CandidateDetail({
         <ScoreBox label="Testing" value={evaluation.userTestingEvidence.score} />
       </div>
 
-      <h3>Evaluation</h3>
+      <div className="evalBlock">
+        <h4>Pathway</h4>
+        <p>{evaluation.pathwayReason}</p>
+      </div>
 
-      <p className="small">
-        <b>Pathway:</b> {evaluation.pathwayReason}
-      </p>
+      <div className="evalBlock">
+        <h4>Functional fit</h4>
+        <p>{evaluation.functionalFit.explanation}</p>
+      </div>
 
-      <p className="small">
-        <b>Fit:</b> {evaluation.functionalFit.explanation}
-      </p>
+      <div className="evalBlock">
+        <h4>Safety</h4>
+        <p>{evaluation.safetyRisk.explanation}</p>
+      </div>
 
-      <p className="small">
-        <b>Safety:</b> {evaluation.safetyRisk.explanation}
-      </p>
-
-      <p className="small">
-        <b>Documentation:</b> {evaluation.documentationQuality.explanation}
-      </p>
+      <div className="evalBlock">
+        <h4>Documentation</h4>
+        <p>{evaluation.documentationQuality.explanation}</p>
+      </div>
 
       <ChipRow label="Matched" items={evaluation.matchedCriteria} tone="good" />
       <ChipRow label="Unmatched" items={evaluation.unmatchedCriteria} tone="bad" />
       <ChipRow label="Missing" items={evaluation.missingInformation} tone="warn" />
+
+      <details className="rawSummary">
+        <summary>Full source summary</summary>
+        <p>{candidate.summary}</p>
+      </details>
 
       <div className="btnRow">
         <button
@@ -885,6 +925,10 @@ function UserFacingCard({ candidate }: { candidate: CandidateProject }) {
         {candidate.evaluation.missingInformation.slice(0, 3).join(", ") ||
           "No major missing information detected."}
       </p>
+
+      <a className="openLink" href={candidate.url} target="_blank" rel="noreferrer">
+        Open original ↗
+      </a>
     </article>
   );
 }

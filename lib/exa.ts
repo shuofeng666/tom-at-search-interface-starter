@@ -41,6 +41,9 @@ export async function searchExaProjects({
         },
         summary: {
           query: buildSummaryInstruction(needProfile)
+        },
+        extras: {
+          imageLinks: 5
         }
       }
     })

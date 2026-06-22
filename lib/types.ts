@@ -119,7 +119,8 @@ export type ExaSearchResult = {
   text?: string;
   summary?: string;
   highlights?: string[];
-  image?: string;
+image?: string;
+  extras?: { imageLinks?: string[] };
 };
 
 export type ExaSearchResponse = {

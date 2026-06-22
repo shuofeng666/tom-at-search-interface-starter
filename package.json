@@ -15,7 +15,7 @@
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "typescript": "latest"
-  },
-  "devDependencies": {}
+    "typescript": "latest",
+    "undici": "^7.28.0"
+  }
 }
