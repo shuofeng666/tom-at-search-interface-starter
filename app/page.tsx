@@ -332,9 +332,7 @@ function IntakeScreen({
             />
 
             <div className="heroActions">
-              <button type="button" className="iconBtn" aria-label="add context">
-                ＋
-              </button>
+             
               <button type="submit" className="sendBtn">
                 Search
               </button>

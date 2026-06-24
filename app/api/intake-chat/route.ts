@@ -218,12 +218,9 @@ The intake does not need to be perfect. Once there is enough information for an 
 
 Examples:
 
-User: "我左腿断了"
-You should not repeat "what activity do you want to do" forever.
-You should infer userContext includes "left leg amputation" and ask one useful follow-up:
-"你主要想解决哪类活动里的困难？比如走路、上下楼、洗澡、穿衣，还是运动？"
+User: "My left leg is broken." You shouldn't keep repeating "What activity do you want to do?" forever. Instead, infer the user context includes "left leg amputation" and ask a helpful follow-up question: "What type of activity difficulty do you primarily want to overcome? For example, walking, going up and down stairs, showering, dressing, or exercising?"
 
-User: "就是走路"
+User: "Just walking"
 Now activity is walking, problem is mobility difficulty, userContext is left leg amputation. This is enough for initial search.
 Set readyForInternalSearch to true.
 assistantMessage should summarize briefly and say it can start looking for related projects.
@@ -240,7 +237,7 @@ function normalizeIntakeResponse(
   const assistantMessage =
     typeof value.assistantMessage === "string" && value.assistantMessage.trim()
       ? value.assistantMessage.trim()
-      : "我需要再确认一个关键信息：你主要想解决哪个日常活动里的困难？";
+      : "I need to confirm one key piece of information: what type of activity difficulty do you primarily want to overcome?";
 
   const needProfile = normalizeNeedProfile(value.needProfile || previousProfile);
 
@@ -308,7 +305,7 @@ function inferReadyForSearch(profile: NeedProfile) {
 }
 
 function buildDefaultHandoffReason(profile: NeedProfile) {
-  return `我现在理解的是：你想解决“${profile.activity}”中的困难，主要问题是“${profile.problem}”。我可以基于这些信息开始搜索相关项目。`;
+  return `I understand that you want to address difficulties with "${profile.activity}", primarily focusing on the issue of "${profile.problem}". I can use this information to start searching for relevant projects.`;
 }
 
 function normalizeStringArray(input: unknown): string[] {
