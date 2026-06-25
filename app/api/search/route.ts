@@ -1,9 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildSearchQuery, searchExaProjects } from "@/lib/exa";
-import { evaluateSearchResults, sortCandidates } from "@/lib/evaluate";
-import { NeedProfile, SearchResponse } from "@/lib/types";
+import { buildSearchQuery, fetchPoolPerDomain } from "@/lib/exa";
+import { buildCandidatesFromExa } from "@/lib/evaluate";
+import { CandidateProject, NeedProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
+
+// Phase 1: FETCH ONLY (fast, no LLM). Pull a few results from each source and
+// return the whole unscored pool. The frontend scores it in pages via
+// /api/evaluate and reveals more with "Load more".
+const PER_DOMAIN = 4;
+
+export type SearchPoolResponse = {
+  query: string;
+  pool: CandidateProject[];
+};
 
 export async function POST(req: NextRequest) {
   try {
@@ -23,39 +33,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      return NextResponse.json(
-        { error: "Missing GEMINI_API_KEY or GOOGLE_API_KEY. Add it to .env.local and restart the dev server." },
-        { status: 500 }
-      );
-    }
-
     const query = buildSearchQuery(needProfile, customQuery);
 
-    const results = await searchExaProjects({
+    const results = await fetchPoolPerDomain({
       query,
       needProfile,
-      numResults: 8
+      perDomain: PER_DOMAIN
     });
 
-    if (!results.length) {
-      return NextResponse.json({
-        query,
-        candidates: [],
-        usedMockData: false
-      } satisfies SearchResponse);
-    }
+    // Build candidates WITHOUT scoring them (evaluation stays empty for now).
+    const pool = buildCandidatesFromExa(results);
 
-    const candidates = await evaluateSearchResults({
-      needProfile,
-      results
-    });
-
-    return NextResponse.json({
-      query,
-      candidates: sortCandidates(candidates),
-      usedMockData: false
-    } satisfies SearchResponse);
+    return NextResponse.json({ query, pool } satisfies SearchPoolResponse);
   } catch (error) {
     console.error("search route error", error);
 

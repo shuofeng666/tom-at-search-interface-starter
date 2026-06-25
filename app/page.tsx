@@ -12,11 +12,14 @@ import { emptyNeedProfile } from "@/lib/types";
 
 type Stage = "intake" | "review" | "output";
 
-type SearchResponse = {
+// Phase 1 returns an unscored pool; we score PAGE_SIZE at a time (first page +
+// each "Load more").
+type SearchPoolResponse = {
   query: string;
-  candidates: CandidateProject[];
-  usedMockData?: boolean;
+  pool: CandidateProject[];
 };
+
+const PAGE_SIZE = 8;
 
 const rejectionOptions = [
   { value: "requires-hand-use", label: "requires too much hand use" },
@@ -47,6 +50,9 @@ const [error, setError] = useState<string | null>(null);
   const [missingInformation, setMissingInformation] = useState<string[]>([]);
   const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<CandidateProject[]>([]);
+  const [pool, setPool] = useState<CandidateProject[]>([]);
+  const [poolCursor, setPoolCursor] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [review, setReview] = useState<ReviewSummary | null>(null);
   const [query, setQuery] = useState<string>("");
   const [loading, setLoading] = useState<string | null>(null);
@@ -129,12 +135,29 @@ async function sendIntakeMessage(content?: string) {
     setLoading(null);
   }
 }
+// Score a batch of already-fetched candidates via the on-demand evaluate route.
+async function scoreBatch(batch: CandidateProject[]): Promise<CandidateProject[]> {
+  const res = await fetch("/api/evaluate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ needProfile, candidates: batch })
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Evaluation failed.");
+
+  return (data.candidates || []) as CandidateProject[];
+}
+
 async function startSearch(customQuery?: string) {
   setLoading("searching projects");
   setError(null);
   setStage("review");
   setReview(null);
   setSelectedForComparison([]);
+  setCandidates([]);
+  setPool([]);
+  setPoolCursor(0);
 
   try {
     const res = await fetch("/api/search", {
@@ -152,23 +175,55 @@ async function startSearch(customQuery?: string) {
       throw new Error(data.error || "Search failed.");
     }
 
-    const searchData = data as SearchResponse;
+    const searchData = data as SearchPoolResponse;
     setQuery(searchData.query);
 
-    const list = searchData.candidates || [];
-    setCandidates(list);
-    setSelectedCandidateId(list[0]?.id || null);
+    const fetchedPool = searchData.pool || [];
+    setPool(fetchedPool);
 
-    if (!list.length) {
+    if (!fetchedPool.length) {
+      setCandidates([]);
+      setSelectedCandidateId(null);
       setError("No real search results were returned. Try broadening the query or removing domain filters.");
+      return;
     }
+
+    // Score only the first page; the rest waits behind "Load more".
+    const firstBatch = fetchedPool.slice(0, PAGE_SIZE);
+    const scored = await scoreBatch(firstBatch);
+
+    setCandidates(scored);
+    setPoolCursor(firstBatch.length);
+    setSelectedCandidateId(scored[0]?.id || null);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Search failed.";
     setError(message);
     setCandidates([]);
+    setPool([]);
+    setPoolCursor(0);
     setSelectedCandidateId(null);
   } finally {
     setLoading(null);
+  }
+}
+
+async function loadMore() {
+  if (poolCursor >= pool.length) return;
+
+  setLoadingMore(true);
+  setError(null);
+
+  try {
+    const nextBatch = pool.slice(poolCursor, poolCursor + PAGE_SIZE);
+    const scored = await scoreBatch(nextBatch);
+
+    setCandidates((previous) => [...previous, ...scored]);
+    setPoolCursor((previous) => previous + nextBatch.length);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Load more failed.";
+    setError(message);
+  } finally {
+    setLoadingMore(false);
   }
 }
 
@@ -271,6 +326,9 @@ async function startSearch(customQuery?: string) {
           toggleComparison={toggleComparison}
           rejectCandidate={rejectCandidate}
           runSearch={startSearch}
+          loadMore={loadMore}
+          canLoadMore={poolCursor < pool.length}
+          loadingMore={loadingMore}
           generateReviewSummary={generateReviewSummary}
           onBackToIntake={() => setStage("intake")}
         />
@@ -332,7 +390,7 @@ function IntakeScreen({
             />
 
             <div className="heroActions">
-             
+
               <button type="submit" className="sendBtn">
                 Search
               </button>
@@ -449,6 +507,9 @@ function ReviewScreen({
   toggleComparison,
   rejectCandidate,
   runSearch,
+  loadMore,
+  canLoadMore,
+  loadingMore,
   generateReviewSummary,
   onBackToIntake
 }: {
@@ -462,6 +523,9 @@ function ReviewScreen({
   toggleComparison: (id: string) => void;
   rejectCandidate: (candidate: CandidateProject, rejectionReason: string) => void;
   runSearch: (query?: string) => void;
+  loadMore: () => void;
+  canLoadMore: boolean;
+  loadingMore: boolean;
   generateReviewSummary: () => void;
   onBackToIntake: () => void;
 }) {
@@ -509,7 +573,7 @@ function ReviewScreen({
 
         <section className="panel resultsPanel">
           <h2>Related projects</h2>
-          <p className="small resultsHint">Sorted by score, highest first. Tap a card for details.</p>
+          <p className="small resultsHint">In source order. Tap a card for details.</p>
 
           <div className="candidateList">
             {candidates.map((candidate) => (
@@ -523,6 +587,16 @@ function ReviewScreen({
               />
             ))}
           </div>
+
+          {canLoadMore && (
+            <button
+              className="plainBtn loadMoreBtn"
+              onClick={loadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? "Scoring…" : "Load more"}
+            </button>
+          )}
         </section>
 
         <aside className="panel detailPanel">
@@ -685,7 +759,15 @@ function CandidateRow({
     >
       <div className="cardMedia">
         {candidate.image ? (
-          <img src={candidate.image} alt="" loading="lazy" />
+          <img
+            src={candidate.image}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+          />
         ) : (
           <div className="cardMediaFallback">{candidate.sourceType}</div>
         )}
@@ -753,18 +835,27 @@ function CandidateDetail({
       </a>
 
       {candidate.image && (
-        <img className="detailThumb" src={candidate.image} alt="" loading="lazy" />
+        <img
+          className="detailThumb"
+          src={candidate.image}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={(event) => {
+            event.currentTarget.style.display = "none";
+          }}
+        />
       )}
 
       <span className="chip warn detailPathway">{evaluation.pathway}</span>
 
       <div className="scoreGrid">
-        <ScoreBox label="Fit" value={evaluation.functionalFit.score} />
-        <ScoreBox label="Safety" value={evaluation.safetyRisk.score} />
-        <ScoreBox label="Docs" value={evaluation.documentationQuality.score} />
-        <ScoreBox label="Make" value={evaluation.accessibilityManufacturability.score} />
-        <ScoreBox label="Cost" value={evaluation.affordabilityAvailability.score} />
-        <ScoreBox label="Testing" value={evaluation.userTestingEvidence.score} />
+        <ScoreBox label="Innovation" value={evaluation.innovation.score} />
+        <ScoreBox label="Quality" value={evaluation.qualityOfSolution.score} />
+        <ScoreBox label="Accessibility" value={evaluation.accessibility.score} />
+        <ScoreBox label="Affordability" value={evaluation.affordability.score} />
+        <ScoreBox label="Documentation" value={evaluation.documentation.score} />
+        <ScoreBox label="Impact" value={evaluation.impact.score} />
       </div>
 
       <div className="evalBlock">
@@ -773,18 +864,33 @@ function CandidateDetail({
       </div>
 
       <div className="evalBlock">
-        <h4>Functional fit</h4>
-        <p>{evaluation.functionalFit.explanation}</p>
+        <h4>Innovation</h4>
+        <p>{evaluation.innovation.explanation}</p>
       </div>
 
       <div className="evalBlock">
-        <h4>Safety</h4>
-        <p>{evaluation.safetyRisk.explanation}</p>
+        <h4>Quality of solution</h4>
+        <p>{evaluation.qualityOfSolution.explanation}</p>
+      </div>
+
+      <div className="evalBlock">
+        <h4>Accessibility</h4>
+        <p>{evaluation.accessibility.explanation}</p>
+      </div>
+
+      <div className="evalBlock">
+        <h4>Affordability</h4>
+        <p>{evaluation.affordability.explanation}</p>
       </div>
 
       <div className="evalBlock">
         <h4>Documentation</h4>
-        <p>{evaluation.documentationQuality.explanation}</p>
+        <p>{evaluation.documentation.explanation}</p>
+      </div>
+
+      <div className="evalBlock">
+        <h4>Impact</h4>
+        <p>{evaluation.impact.explanation}</p>
       </div>
 
       <ChipRow label="Matched" items={evaluation.matchedCriteria} tone="good" />
@@ -844,8 +950,8 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
         <thead>
           <tr>
             <th>Project</th>
-            <th>Fit</th>
-            <th>Safety</th>
+            <th>Impact</th>
+            <th>Quality</th>
             <th>Docs</th>
             <th>Pathway</th>
           </tr>
@@ -855,9 +961,9 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
           {candidates.map((candidate) => (
             <tr key={candidate.id}>
               <td>{candidate.title}</td>
-              <td>{candidate.evaluation.functionalFit.score}</td>
-              <td>{candidate.evaluation.safetyRisk.score}</td>
-              <td>{candidate.evaluation.documentationQuality.score}</td>
+              <td>{candidate.evaluation.impact.score}</td>
+              <td>{candidate.evaluation.qualityOfSolution.score}</td>
+              <td>{candidate.evaluation.documentation.score}</td>
               <td>{candidate.evaluation.pathway}</td>
             </tr>
           ))}
@@ -915,7 +1021,7 @@ function UserFacingCard({ candidate }: { candidate: CandidateProject }) {
       <p>{candidate.summary}</p>
 
       <p className="small">
-        <b>Why it may help:</b> {candidate.evaluation.functionalFit.explanation}
+        <b>Why it may help:</b> {candidate.evaluation.impact.explanation}
       </p>
 
       <p className="small">

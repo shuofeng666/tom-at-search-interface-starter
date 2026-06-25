@@ -55,15 +55,13 @@ export type EvaluationDimension = {
 export type CandidateEvaluation = {
   overallScore: number;
 
-  needMatch: EvaluationDimension;
-  functionalFit: EvaluationDimension;
-  accessibilityManufacturability: EvaluationDimension;
-  affordabilityAvailability: EvaluationDimension;
+  // TOM official Judging Criteria (tomchallenge.org/your-gic-project)
+  innovation: EvaluationDimension;
   qualityOfSolution: EvaluationDimension;
-  documentationQuality: EvaluationDimension;
-  userTestingEvidence: EvaluationDimension;
-  safetyRisk: EvaluationDimension;
-  customizationPotential: EvaluationDimension;
+  accessibility: EvaluationDimension;
+  affordability: EvaluationDimension;
+  documentation: EvaluationDimension;
+  impact: EvaluationDimension;
 
   matchedCriteria: string[];
   unmatchedCriteria: string[];
@@ -156,15 +154,12 @@ export function emptyCandidateEvaluation(): CandidateEvaluation {
   return {
     overallScore: 0,
 
-    needMatch: emptyEvaluationDimension(),
-    functionalFit: emptyEvaluationDimension(),
-    accessibilityManufacturability: emptyEvaluationDimension(),
-    affordabilityAvailability: emptyEvaluationDimension(),
+    innovation: emptyEvaluationDimension(),
     qualityOfSolution: emptyEvaluationDimension(),
-    documentationQuality: emptyEvaluationDimension(),
-    userTestingEvidence: emptyEvaluationDimension(),
-    safetyRisk: emptyEvaluationDimension(),
-    customizationPotential: emptyEvaluationDimension(),
+    accessibility: emptyEvaluationDimension(),
+    affordability: emptyEvaluationDimension(),
+    documentation: emptyEvaluationDimension(),
+    impact: emptyEvaluationDimension(),
 
     matchedCriteria: [],
     unmatchedCriteria: [],

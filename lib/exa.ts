@@ -8,11 +8,13 @@ import {
 export async function searchExaProjects({
   query,
   needProfile,
-  numResults = 8
+  numResults = 8,
+  includeDomainsOverride
 }: {
   query: string;
   needProfile: NeedProfile;
   numResults?: number;
+  includeDomainsOverride?: string[];
 }): Promise<ExaSearchResult[]> {
   const apiKey = process.env.EXA_API_KEY;
 
@@ -20,7 +22,8 @@ export async function searchExaProjects({
     return [];
   }
 
-  const includeDomains = parseDomainList(process.env.EXA_INCLUDE_DOMAINS);
+  const includeDomains =
+    includeDomainsOverride ?? parseDomainList(process.env.EXA_INCLUDE_DOMAINS);
 
   const res = await fetch("https://api.exa.ai/search", {
     method: "POST",
@@ -43,7 +46,7 @@ export async function searchExaProjects({
           query: buildSummaryInstruction(needProfile)
         },
         extras: {
-          imageLinks: 5
+          imageLinks: 8
         }
       }
     })
@@ -57,6 +60,54 @@ export async function searchExaProjects({
 
   const data = (await res.json()) as ExaSearchResponse;
   return data.results || [];
+}
+
+// Fetch a few results from EACH configured source (one Exa call per domain),
+// then interleave them round-robin so the pool isn't dominated by one site.
+// This is fast (Exa calls only, no scoring) and guarantees source diversity by
+// construction. Scoring happens later, in pages, via the /api/evaluate route.
+export async function fetchPoolPerDomain({
+  query,
+  needProfile,
+  perDomain = 4
+}: {
+  query: string;
+  needProfile: NeedProfile;
+  perDomain?: number;
+}): Promise<ExaSearchResult[]> {
+  const domains = parseDomainList(process.env.EXA_INCLUDE_DOMAINS);
+
+  // No domain restriction configured -> fall back to one global search.
+  if (!domains.length) {
+    return searchExaProjects({ query, needProfile, numResults: perDomain * 4 });
+  }
+
+  const perDomainResults = await Promise.all(
+    domains.map((domain) =>
+      searchExaProjects({
+        query,
+        needProfile,
+        numResults: perDomain,
+        includeDomainsOverride: [domain]
+      })
+    )
+  );
+
+  return interleave(perDomainResults);
+}
+
+// Round-robin merge: [a1,a2], [b1,b2,b3], [c1] -> a1,b1,c1,a2,b2,b3
+function interleave<T>(groups: T[][]): T[] {
+  const merged: T[] = [];
+  const maxLen = groups.reduce((max, group) => Math.max(max, group.length), 0);
+
+  for (let i = 0; i < maxLen; i += 1) {
+    for (const group of groups) {
+      if (i < group.length) merged.push(group[i]);
+    }
+  }
+
+  return merged;
 }
 
 export function buildSearchQuery(needProfile: NeedProfile, customQuery?: string) {
