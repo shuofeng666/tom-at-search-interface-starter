@@ -47,24 +47,93 @@ export async function searchTomProjects({
 
   const query = buildTomUserInput(needProfile);
 
-  const candidatesWithQuery = await fetchTomProjectCandidates({
+  if (!query) {
+    console.warn("No usable TOM search query. TOM projects will be skipped.");
+    return [];
+  }
+
+  const candidates = await fetchTomProjectCandidates({
     endpoint,
     userInput: query,
     limit
   });
 
-  // If TOM's own search is too strict, fall back to the type=5 project library.
-  if (candidatesWithQuery.length >= 3 || !query) {
-    return candidatesWithQuery;
-  }
+  return filterTomCandidatesByNeed(candidates, needProfile);
+}
 
-  const fallbackCandidates = await fetchTomProjectCandidates({
-    endpoint,
-    userInput: "",
-    limit
+function filterTomCandidatesByNeed(
+  candidates: CandidateProject[],
+  needProfile: NeedProfile
+) {
+  const keywords = buildTomKeywords(needProfile);
+
+  if (!keywords.length) return candidates;
+
+  return candidates.filter((candidate) => {
+    const text = [
+      candidate.title,
+      candidate.summary,
+      candidate.rawText
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    const matchedKeywords = keywords.filter((keyword) =>
+      text.includes(keyword)
+    );
+
+    // 如果关键词很多，至少 match 2 个；如果关键词少，至少 match 1 个。
+    const minimumMatches = keywords.length >= 4 ? 2 : 1;
+
+    return matchedKeywords.length >= minimumMatches;
   });
+}
 
-  return mergeTomCandidates(candidatesWithQuery, fallbackCandidates);
+function buildTomKeywords(needProfile: NeedProfile) {
+  const rawText = [
+    needProfile.activity,
+    needProfile.problem,
+    needProfile.desiredOutcome,
+    ...needProfile.currentDevices,
+    ...needProfile.bodyFunction,
+    ...needProfile.mustHave,
+    ...needProfile.preferences
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const stopwords = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "without",
+    "assistive",
+    "adaptive",
+    "device",
+    "solution",
+    "user",
+    "person",
+    "people",
+    "need",
+    "needs",
+    "use",
+    "using",
+    "easy",
+    "attach",
+    "remove"
+  ]);
+
+  return Array.from(
+    new Set(
+      rawText
+        .replace(/[^a-z0-9\s-]/g, " ")
+        .split(/\s+/)
+        .map((word) => word.trim())
+        .filter((word) => word.length >= 4)
+        .filter((word) => !stopwords.has(word))
+    )
+  ).slice(0, 12);
 }
 
 async function fetchTomProjectCandidates({
@@ -81,7 +150,7 @@ async function fetchTomProjectCandidates({
   url.searchParams.set("skip", "0");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("selectedTypes", "5");
-  url.searchParams.set("userInput", userInput || "undefined");
+url.searchParams.set("userInput", userInput);
 
   const res = await fetch(url.toString(), {
     headers: {
@@ -160,10 +229,8 @@ function buildTomCandidate(project: TomProject): CandidateProject {
 function buildTomUserInput(needProfile: NeedProfile) {
   const parts = [
     needProfile.activity,
-    needProfile.problem,
     needProfile.desiredOutcome,
     ...needProfile.currentDevices,
-    ...needProfile.bodyFunction,
     ...needProfile.mustHave
   ];
 
@@ -176,7 +243,8 @@ function buildTomUserInput(needProfile: NeedProfile) {
         part !== "unknown problem" &&
         part !== "unknown desired outcome"
     )
-    .join(" ");
+    .join(" ")
+    .slice(0, 160);
 }
 
 function mergeTomCandidates(
