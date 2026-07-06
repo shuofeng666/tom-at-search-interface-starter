@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildSearchQuery, fetchPrioritizedPool } from "@/lib/exa";
 import { buildCandidatesFromExa } from "@/lib/evaluate";
+import { searchTomProjects } from "@/lib/tom";
 import { CandidateProject, NeedProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -8,7 +9,8 @@ export const runtime = "nodejs";
 // Phase 1: FETCH ONLY (fast, no LLM). Pull a few results from each source and
 // return the whole unscored pool. The frontend scores it in pages via
 // /api/evaluate and reveals more with "Load more".
-const PRIMARY_PER_DOMAIN = 8;
+const TOM_LIMIT = 15;
+const PRIMARY_PER_DOMAIN = 0;
 const SECONDARY_PER_DOMAIN = 3;
 const COMMERCIAL_PER_DOMAIN = 2;
 
@@ -25,28 +27,41 @@ export async function POST(req: NextRequest) {
     const customQuery = typeof body.query === "string" ? body.query : undefined;
 
     if (!needProfile) {
-      return NextResponse.json({ error: "Missing needProfile." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing needProfile." },
+        { status: 400 },
+      );
     }
 
     if (!process.env.EXA_API_KEY) {
       return NextResponse.json(
-        { error: "Missing EXA_API_KEY. Add it to .env.local and restart the dev server." },
-        { status: 500 }
+        {
+          error:
+            "Missing EXA_API_KEY. Add it to .env.local and restart the dev server.",
+        },
+        { status: 500 },
       );
     }
 
     const query = buildSearchQuery(needProfile, customQuery);
 
-const results = await fetchPrioritizedPool({
-  query,
-  needProfile,
-  primaryPerDomain: PRIMARY_PER_DOMAIN,
-  secondaryPerDomain: SECONDARY_PER_DOMAIN,
-  commercialPerDomain: COMMERCIAL_PER_DOMAIN
-});
+    const [tomCandidates, externalResults] = await Promise.all([
+      searchTomProjects({
+        needProfile,
+        limit: TOM_LIMIT,
+      }),
+      fetchPrioritizedPool({
+        query,
+        needProfile,
+        primaryPerDomain: PRIMARY_PER_DOMAIN,
+        secondaryPerDomain: SECONDARY_PER_DOMAIN,
+        commercialPerDomain: COMMERCIAL_PER_DOMAIN,
+      }),
+    ]);
 
-    // Build candidates WITHOUT scoring them (evaluation stays empty for now).
-    const pool = buildCandidatesFromExa(results);
+    const externalCandidates = buildCandidatesFromExa(externalResults);
+
+    const pool = [...tomCandidates, ...externalCandidates];
 
     return NextResponse.json({ query, pool } satisfies SearchPoolResponse);
   } catch (error) {
@@ -54,7 +69,7 @@ const results = await fetchPrioritizedPool({
 
     return NextResponse.json(
       { error: "Search failed. Check the server console for the API error." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
