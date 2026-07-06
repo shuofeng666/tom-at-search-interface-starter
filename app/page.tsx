@@ -385,14 +385,14 @@ function IntakeScreen({
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="Describe the challenge, daily activity, or assistive technology need..."
+              placeholder="Describe the daily challenge. For example: what are you trying to do, and what makes it difficult, unsafe, or uncomfortable?"
               autoFocus
             />
 
             <div className="heroActions">
 
               <button type="submit" className="sendBtn">
-                Search
+                Start intake
               </button>
             </div>
           </form>
@@ -455,30 +455,63 @@ function IntakeScreen({
           `I understand the need as: ${needProfile.activity} — ${needProfile.problem}`}
       </p>
 
-      <div className="summaryGrid">
-        <div>
-          <b>Activity</b>
-          <span>{needProfile.activity || "not specified"}</span>
-        </div>
+<div className="summaryGrid">
+  <div>
+    <b>Activity</b>
+    <span>{needProfile.activity || "not specified"}</span>
+  </div>
 
-        <div>
-          <b>Problem</b>
-          <span>{needProfile.problem || "not specified"}</span>
-        </div>
+  <div>
+    <b>Problem</b>
+    <span>{needProfile.problem || "not specified"}</span>
+  </div>
 
-        <div>
-          <b>User context</b>
-          <span>{needProfile.userContext.join(", ") || "not specified"}</span>
-        </div>
+  <div>
+    <b>Desired outcome</b>
+    <span>{needProfile.desiredOutcome || "not specified"}</span>
+  </div>
 
-        <div>
-          <b>Search directions</b>
-          <span>
-            {needProfile.searchDirections.slice(0, 4).join(", ") ||
-              "to be generated"}
-          </span>
-        </div>
-      </div>
+  <div>
+    <b>Age / role</b>
+    <span>
+      {[needProfile.userAge, needProfile.seekerRole]
+        .filter(Boolean)
+        .join(" / ") || "not specified"}
+    </span>
+  </div>
+
+  <div>
+    <b>Location</b>
+    <span>
+      {[needProfile.location.cityOrRegion, needProfile.location.country]
+        .filter(Boolean)
+        .join(", ") || "not specified"}
+    </span>
+  </div>
+
+  <div>
+    <b>User context</b>
+    <span>
+      {[
+        ...needProfile.userContext,
+        ...needProfile.bodyFunction,
+        ...needProfile.currentDevices,
+      ].join(", ") || "not specified"}
+    </span>
+  </div>
+
+  <div>
+    <b>Environment</b>
+    <span>{needProfile.environment.join(", ") || "not specified"}</span>
+  </div>
+
+  <div>
+    <b>Search directions</b>
+    <span>
+      {needProfile.searchDirections.slice(0, 4).join(", ") || "to be generated"}
+    </span>
+  </div>
+</div>
 
       {missingInformation.length > 0 && (
         <p className="missingText">
@@ -683,11 +716,19 @@ function OutputScreen({
 
 function NeedProfileView({
   profile,
-  compact = false
+  compact = false,
 }: {
   profile: NeedProfile;
   compact?: boolean;
 }) {
+  const location = [profile.location.cityOrRegion, profile.location.country]
+    .filter(Boolean)
+    .join(", ");
+
+  const ageAndRole = [profile.userAge, profile.seekerRole]
+    .filter(Boolean)
+    .join(" / ");
+
   return (
     <div className={compact ? "needProfile compact" : "needProfile"}>
       <div className="kv">
@@ -700,12 +741,37 @@ function NeedProfileView({
         <span>{profile.problem}</span>
       </div>
 
+      <div className="kv">
+        <b>Desired outcome</b>
+        <span>{profile.desiredOutcome || "not specified"}</span>
+      </div>
+
+      <div className="kv">
+        <b>Age / role</b>
+        <span>{ageAndRole || "not specified"}</span>
+      </div>
+
+      <div className="kv">
+        <b>Location</b>
+        <span>{location || "not specified"}</span>
+      </div>
+
       <ChipRow label="User context" items={profile.userContext} />
+      <ChipRow label="Body function" items={profile.bodyFunction} />
+      <ChipRow label="Current devices" items={profile.currentDevices} />
       <ChipRow label="Environment" items={profile.environment} />
+
       <ChipRow label="Must have" items={profile.mustHave} tone="good" />
       <ChipRow label="Must avoid" items={profile.mustAvoid} tone="bad" />
 
-      {!compact && <ChipRow label="Safety" items={profile.safetyConcerns} tone="warn" />}
+      {!compact && (
+        <ChipRow label="Preferences" items={profile.preferences} />
+      )}
+
+      {!compact && (
+        <ChipRow label="Safety" items={profile.safetyConcerns} tone="warn" />
+      )}
+
       {!compact && <ChipRow label="Unknowns" items={profile.unknowns} />}
     </div>
   );

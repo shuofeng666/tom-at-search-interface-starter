@@ -115,24 +115,48 @@ export function buildSearchQuery(needProfile: NeedProfile, customQuery?: string)
     return customQuery.trim();
   }
 
+  const location = [
+    needProfile.location?.cityOrRegion,
+    needProfile.location?.country,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   const parts = [
     needProfile.activity,
     needProfile.problem,
+    needProfile.desiredOutcome,
+
+    needProfile.userAge ? `age ${needProfile.userAge}` : "",
+    location,
+
     ...needProfile.userContext,
+    ...needProfile.bodyFunction,
+    ...needProfile.currentDevices,
     ...needProfile.environment,
+
     ...needProfile.mustHave,
+    ...needProfile.preferences,
+    ...needProfile.safetyConcerns,
+
     ...needProfile.mustAvoid.map((item) => `without ${item}`),
+
     "assistive technology",
     "adaptive device",
     "DIY",
     "open source",
-    "TOM project"
+    "TOM project",
   ];
 
   return parts
     .map((part) => part.trim())
     .filter(Boolean)
-    .filter((part) => part !== "unknown activity" && part !== "unknown problem")
+    .filter(
+      (part) =>
+        part !== "unknown activity" &&
+        part !== "unknown problem" &&
+        part !== "unknown desired outcome",
+    )
     .join(" ");
 }
 
@@ -188,14 +212,19 @@ function parseDomainList(value?: string) {
 function buildSummaryInstruction(needProfile: NeedProfile) {
   return `
 Summarize this page for a TOM assistive technology reviewer.
+
 Focus on:
 - what problem the project/product solves
 - who it is for
+- what activity it supports
 - how it works
-- materials, tools, or files if available
+- whether it matches the user's age/location/context when relevant
+- materials, tools, CAD files, STL files, or build instructions if available
 - safety concerns
+- cleaning, portability, compatibility, and maintenance
 - missing documentation
-- whether it matches this need:
-${JSON.stringify(needProfile)}
+- whether it matches this Need Profile:
+
+${JSON.stringify(needProfile, null, 2)}
 `;
 }

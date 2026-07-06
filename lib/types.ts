@@ -6,15 +6,43 @@ export type ChatMessage = {
   content: string;
 };
 
+export type SeekerRole =
+  | "self"
+  | "caregiver"
+  | "TOM staff"
+  | "clinician"
+  | "other"
+  | "unknown";
+
+export type NeedLocation = {
+  country: string;
+  cityOrRegion: string;
+};
+
 export type NeedProfile = {
+  // Core lived challenge
   activity: string;
   problem: string;
+  desiredOutcome: string;
+
+  // Mandatory intake fields
+  seekerRole: SeekerRole;
+  userAge: string;
+  location: NeedLocation;
+
+  // Context
   userContext: string[];
+  bodyFunction: string[];
+  currentDevices: string[];
   environment: string[];
+
+  // Criteria
   mustHave: string[];
   mustAvoid: string[];
   safetyConcerns: string[];
   preferences: string[];
+
+  // Process
   unknowns: string[];
   searchDirections: string[];
 };
@@ -55,7 +83,7 @@ export type EvaluationDimension = {
 export type CandidateEvaluation = {
   overallScore: number;
 
-  // TOM official Judging Criteria (tomchallenge.org/your-gic-project)
+  // TOM official judging dimensions / internal review dimensions
   innovation: EvaluationDimension;
   qualityOfSolution: EvaluationDimension;
   accessibility: EvaluationDimension;
@@ -81,9 +109,7 @@ export type CandidateProject = {
   image?: string;
   summary: string;
   rawText?: string;
-
   evaluation: CandidateEvaluation;
-
   saved?: boolean;
   rejected?: boolean;
   rejectionReason?: string;
@@ -117,8 +143,10 @@ export type ExaSearchResult = {
   text?: string;
   summary?: string;
   highlights?: string[];
-image?: string;
-  extras?: { imageLinks?: string[] };
+  image?: string;
+  extras?: {
+    imageLinks?: string[];
+  };
 };
 
 export type ExaSearchResponse = {
@@ -131,14 +159,33 @@ export function emptyNeedProfile(): NeedProfile {
   return {
     activity: "unknown activity",
     problem: "unknown problem",
+    desiredOutcome: "unknown desired outcome",
+
+    seekerRole: "unknown",
+    userAge: "",
+    location: {
+      country: "",
+      cityOrRegion: "",
+    },
+
     userContext: [],
+    bodyFunction: [],
+    currentDevices: [],
     environment: [],
+
     mustHave: [],
     mustAvoid: [],
     safetyConcerns: [],
     preferences: [],
-    unknowns: [],
-    searchDirections: []
+
+    unknowns: [
+      "what activity the person wants to do",
+      "what makes the activity difficult",
+      "where the solution will be used",
+      "age or age range",
+      "country or region",
+    ],
+    searchDirections: [],
   };
 }
 
@@ -146,27 +193,24 @@ export function emptyEvaluationDimension(): EvaluationDimension {
   return {
     score: 0,
     explanation: "No evidence available yet.",
-    evidence: []
+    evidence: [],
   };
 }
 
 export function emptyCandidateEvaluation(): CandidateEvaluation {
   return {
     overallScore: 0,
-
     innovation: emptyEvaluationDimension(),
     qualityOfSolution: emptyEvaluationDimension(),
     accessibility: emptyEvaluationDimension(),
     affordability: emptyEvaluationDimension(),
     documentation: emptyEvaluationDimension(),
     impact: emptyEvaluationDimension(),
-
     matchedCriteria: [],
     unmatchedCriteria: [],
     missingInformation: [],
     riskFlags: [],
-
     pathway: "needs more information",
-    pathwayReason: "The project has not been evaluated yet."
+    pathwayReason: "The project has not been evaluated yet.",
   };
 }

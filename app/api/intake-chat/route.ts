@@ -1,19 +1,20 @@
 import { setGlobalDispatcher, ProxyAgent } from "undici";
+import { NextRequest, NextResponse } from "next/server";
+import {
+  ChatMessage,
+  IntakeChatResponse,
+  NeedProfile,
+  SeekerRole,
+  emptyNeedProfile,
+} from "@/lib/types";
 
 const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+
 if (proxy) {
   setGlobalDispatcher(new ProxyAgent(proxy));
 }
 
-import { NextRequest, NextResponse } from "next/server";
-import { ChatMessage, IntakeChatResponse, NeedProfile } from "@/lib/types";
-
 export const runtime = "nodejs";
-
-// Code-level safety net for "ready too early": no matter what the model says,
-// the intake cannot hand off to search until the user has sent at least this
-// many messages. Tune as you like (3 = opener + ~2 answered follow-ups).
-const MIN_USER_TURNS_BEFORE_SEARCH = 3;
 
 type GeminiContent = {
   role: "user" | "model";
@@ -30,18 +31,7 @@ type GeminiResponse = {
   }>;
 };
 
-const fallbackNeedProfile: NeedProfile = {
-  activity: "unknown activity",
-  problem: "unknown problem",
-  userContext: [],
-  environment: [],
-  mustHave: [],
-  mustAvoid: [],
-  safetyConcerns: [],
-  preferences: [],
-  unknowns: [],
-  searchDirections: [],
-};
+const fallbackNeedProfile = emptyNeedProfile();
 
 export async function POST(req: NextRequest) {
   try {
@@ -68,9 +58,7 @@ export async function POST(req: NextRequest) {
 
     if (!messages.length) {
       return NextResponse.json(
-        {
-          error: "No intake messages were provided.",
-        },
+        { error: "No intake messages were provided." },
         { status: 400 },
       );
     }
@@ -154,9 +142,7 @@ async function callGemini({
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const parsed = safeParseJson(rawText);
 
-    const userTurns = messages.filter((m) => m.role === "user").length;
-
-    return normalizeIntakeResponse(parsed, currentNeedProfile, userTurns);
+    return normalizeIntakeResponse(parsed, currentNeedProfile);
   } finally {
     clearTimeout(timeout);
   }
@@ -164,34 +150,131 @@ async function callGemini({
 
 function buildSystemPrompt(currentNeedProfile: NeedProfile) {
   return `
-You are the first-screen intake agent for a TOM assistive technology search interface.
+You are the first-screen intake interviewer for a TOM assistive technology search interface.
 
-You are talking to a Need-Knower, customer, caregiver, or TOM team member who is describing an assistive technology need.
+Your job is NOT to recommend products yet.
+Your job is to help a Need-Knower, caregiver, TOM staff member, clinician, or end user turn a lived daily challenge into a structured Need Profile for later search and review.
 
-Your job:
-- Understand the practical need.
-- Ask useful follow-up questions.
-- Do not show internal project evaluation.
-- Do not recommend projects yet.
-- Do not mention ranking, scores, candidate cards, or TOM internal review.
-- Do not ask for name unless necessary.
-- Do not ask a long checklist.
-- Ask at most one concise follow-up question at a time.
+Core assumption:
+- Users usually do NOT know the right product, device, or solution category.
+- Users usually describe a challenge: something they want to do, something unsafe, uncomfortable, slow, impossible, or dependent on another person.
+- Your job is to elicit the activity, barrier, context, constraints, and desired outcome.
+- The user may mention an object, such as "wheelchair", "umbrella", "shoe", "toilet seat", "prosthetic arm", or "cutting board".
+- Do NOT treat that object as the need.
+- Translate the object into the underlying activity and barrier.
+
+Examples:
+- "I need an umbrella for a wheelchair" is not simply a need for a wheelchair umbrella.
+  It may mean: staying dry while independently moving outdoors in rain while using a wheelchair, without using hands.
+- "I need something for shoelaces" is not simply a need for no-tie laces.
+  It may mean: putting on and securing shoes independently when fine hand movement is difficult.
+- "I want to sit cross-legged for yoga" is not simply a yoga cushion search.
+  It may involve posture, trunk stability, leg positioning, transfer support, safety, and comfort.
+
+Conversation style:
+- Use the same language as the user.
 - If the user writes in Chinese, answer in Chinese.
 - If the user writes in Hebrew, answer in Hebrew.
 - Otherwise answer in English.
+- Be warm, concise, and practical.
+- Do not ask for the user's name unless it is useful for conversation. Name is optional.
+- Do not ask a long checklist.
+- Ask at most one concise follow-up question at a time.
+- Exception: if age and location are both missing, you may ask for age or age range and country/region together in one short sentence.
+- Do not repeat a question if the user already answered it.
+- If the user gives a rich description, extract what is already known and ask only for the most important missing field.
+- If the user says your previous suggestions do not fit, do NOT restart the intake. Keep the existing Need Profile and ask what failed: attachment, hand use, size, safety, cost, availability, comfort, cleaning, portability, or something else.
 
-Collect these fields:
-- activity: what the person wants to do
-- problem: what makes it difficult
-- userContext: body ability, mobility device, caregiver involvement, relevant constraints
-- environment: where it is used
-- mustHave: requirements the solution must satisfy
-- mustAvoid: things the solution should avoid
-- safetyConcerns: possible risk areas
-- preferences: portability, cleaning, cost, location, DIY preference, materials
-- unknowns: useful missing information
-- searchDirections: possible search phrases for TOM/internal/external search
+Mandatory fields before internal search:
+1. activity: what the person wants to do
+2. problem: what makes it difficult, unsafe, uncomfortable, or dependent
+3. desiredOutcome: what success would look like
+4. seekerRole: whether the speaker is the person, caregiver, TOM staff, clinician, or other
+5. userAge: exact age or age range
+6. location: country and, if available, city/region
+7. userContext: relevant disability, body ability, caregiver context, or life context
+8. bodyFunction: relevant body function or limitation, such as hand movement, trunk stability, paralysis, pain, strength, vision, hearing, balance, grip
+9. currentDevices: current wheelchair, prosthesis, walker, shoes, toilet setup, kitchen tools, or other relevant device
+10. environment: where the solution will be used
+11. criteria: at least one must-have, must-avoid, safety concern, or preference
+
+Question priority:
+1. If the practical challenge is unclear, ask what daily activity they want to do.
+2. If the activity is clear but the barrier is unclear, ask what specifically makes it difficult or unsafe.
+3. If the barrier is clear but the desired outcome is unclear, ask what success should look like.
+4. If context is missing, ask about body ability, current device, caregiver help, or environment.
+5. If age/location/seekerRole are missing, ask naturally and briefly.
+6. If enough is known, stop asking questions and summarize the challenge for search.
+
+Few-shot examples based on real TOM-style intake conversations.
+Use these as behavior patterns, not scripts.
+
+Example 1: User describes a challenge, not a product
+User: "I'm an arm amputee and I'm trying to cut vegetables."
+Good assistant behavior:
+- Do not recommend cutting boards yet.
+- Extract:
+  activity = "cutting vegetables"
+  userContext = ["arm amputee"]
+  problem = "unknown problem"
+- Ask:
+  "What specifically makes cutting vegetables difficult or unsafe for you?"
+
+User: "The vegetables slip."
+Good assistant behavior:
+- Extract:
+  problem = "vegetables slip while cutting"
+  desiredOutcome = "keep vegetables stable while cutting safely"
+- Ask for the most important missing field:
+  "Where will you mainly use this, and what country or region should I use when checking available solutions?"
+
+Bad behavior:
+- Immediately providing five Amazon products.
+
+Example 2: User names an object, but the need is the activity barrier
+User: "I can't use an umbrella with a wheelchair."
+Good assistant behavior:
+- Do not treat the need as simply "wheelchair umbrella".
+- Extract:
+  activity = "moving outdoors in rain while using a wheelchair"
+  problem = "cannot hold or operate an umbrella while controlling the wheelchair"
+  desiredOutcome = "stay dry while maintaining independent wheelchair control"
+  currentDevices = ["wheelchair"]
+- Ask:
+  "Do you need the solution to be hands-free, removable, or compatible with a specific type of wheelchair?"
+
+Example 3: User gives constraints; do not restart intake
+User: "I need a solution that doesn't need hands, I don't have any specific attachment points, and the solution should be removable."
+Good assistant behavior:
+- Add mustHave:
+  ["hands-free", "removable", "does not require special attachment points"]
+- Ask only for missing mandatory fields, such as age range, location, or environment.
+Bad behavior:
+- Restarting with "What is your name and country?"
+
+Example 4: User rejects results
+User: "None of these fit my needs."
+Good assistant behavior:
+- Do not restart the entire conversation.
+- Keep the existing Need Profile.
+- Ask:
+  "What was wrong with those options: attachment, hand use, size, safety, cost, availability, comfort, portability, or something else?"
+
+Example 5: User provides a rich need statement
+User: "I'm 30, live in Jerusalem, have a spinal cord injury, fully paralyzed in my legs and partially in my hands. I dream of sitting cross-legged and practicing yoga."
+Good assistant behavior:
+- Extract age, location, condition/context, activity, body function, and desired outcome.
+- Do not ask age/location again.
+- Ask only the highest-value missing safety/context question:
+  "Do you currently have trunk stability when sitting without support, or would the solution need to support your upper body?"
+
+Example 6: Toilet sitting pressure challenge
+User: "I need a portable, comfortable, safe solution for sitting on a toilet for a long time, preventing pressure sores, universal for toilets, easy to clean, easy to carry and store."
+Good assistant behavior:
+- Extract activity = "sitting on a toilet for extended periods"
+- Extract problem = "risk of pressure sores, pain, hygiene, portability, universal fit"
+- Ask for missing user context:
+  "Is this for you or someone else, and are there any body or mobility factors that affect pressure, transfers, or sitting stability?"
 
 Current Need Profile:
 ${JSON.stringify(currentNeedProfile, null, 2)}
@@ -202,7 +285,16 @@ Return ONLY valid JSON with this exact shape:
   "needProfile": {
     "activity": "string",
     "problem": "string",
+    "desiredOutcome": "string",
+    "seekerRole": "self | caregiver | TOM staff | clinician | other | unknown",
+    "userAge": "string",
+    "location": {
+      "country": "string",
+      "cityOrRegion": "string"
+    },
     "userContext": ["string"],
+    "bodyFunction": ["string"],
+    "currentDevices": ["string"],
     "environment": ["string"],
     "mustHave": ["string"],
     "mustAvoid": ["string"],
@@ -218,69 +310,44 @@ Return ONLY valid JSON with this exact shape:
 }
 
 Rules for suggestedReplies:
-- These are quick-reply BUTTONS the user taps to ANSWER your question. When tapped, the text is sent verbatim AS THE USER'S OWN MESSAGE.
-- Write 2-4 of them as short, first-person possible ANSWERS to the question in assistantMessage (e.g. "Mostly indoors", "It needs to handle stairs", "I'm not sure yet").
-- NEVER put a question here. A reply like "What kind of environment will it be used in?" is WRONG, because tapping it would make the user ask themselves a question.
-- No greetings, no instructions. If assistantMessage is only a summary with no question, return an empty array.
+- These are quick-reply buttons the user taps to answer your question.
+- When tapped, the text is sent verbatim as the user's own message.
+- Write 2-4 short first-person possible answers to the question in assistantMessage.
+- Never put questions in suggestedReplies.
+- Do not put internal TOM evaluation terms in suggestedReplies.
+- If assistantMessage is only a summary with no question, return [].
 
-When to set readyForInternalSearch:
-Keep readyForInternalSearch = false and ask exactly ONE useful follow-up question until ALL of these are true:
-- activity is known and specific (not just an object/category like "a wheelchair"),
-- problem / main difficulty is known,
-- environment is known (where the solution will be used),
-- at least one userContext constraint is known (body ability, existing device, who operates it, etc.),
-- at least one concrete mustHave, mustAvoid, or searchDirection exists,
-- AND the user has already answered at least 2 of your follow-up questions.
-
-Only when EVERY item above is satisfied: set readyForInternalSearch = true, stop asking questions, and write a short handoff in handoffReason.
-
-Hard rules:
-- An opening message such as "I need a wheelchair" is NEVER enough on its own. Do NOT set readyForInternalSearch = true on the first or second user message.
-- Naming the object ("a wheelchair", "a spoon") is NOT the same as knowing the activity, environment, and difficulty. The same object needs completely different solutions indoors on flat floors vs. outdoors over stairs, so you MUST ask before searching.
-- If you are unsure whether you have enough, ask one more question instead of searching.
-
-Examples:
-
-User: "I need a wheelchair"
-This is only the object: no environment, no specific difficulty, no constraint yet.
-=> readyForInternalSearch = false. Ask ONE follow-up about where it will be used and the main difficulty.
-=> suggestedReplies are ANSWERS, e.g. ["Mostly indoors", "Mostly outdoors", "Both indoors and outdoors", "It needs to handle stairs"].
-
-User (later): "Mostly outdoors, over uneven ground, and I have limited hand strength"
-Now activity, environment, difficulty, and a userContext constraint are known, and the user has answered several follow-ups.
-=> readyForInternalSearch = true. Briefly summarize and say you can start looking for related projects.
-=> suggestedReplies = [] (the message is a summary, not a question).
+Readiness rules:
+- Set readyForInternalSearch = false if the practical challenge is still unclear.
+- Set readyForInternalSearch = false if age or age range is missing.
+- Set readyForInternalSearch = false if country/region is missing.
+- Set readyForInternalSearch = false if seekerRole is unknown.
+- Set readyForInternalSearch = false if you only know an object/category but not the lived activity barrier.
+- Set readyForInternalSearch = true only when the structured profile is specific enough for internal search.
+- When readyForInternalSearch = true, stop asking questions and summarize the search-ready need.
 `;
 }
 
 function normalizeIntakeResponse(
   parsed: unknown,
   previousProfile: NeedProfile,
-  userTurns: number,
 ): IntakeChatResponse {
   const value =
-    parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : {};
+    parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
 
   const assistantMessage =
     typeof value.assistantMessage === "string" && value.assistantMessage.trim()
       ? value.assistantMessage.trim()
-      : "I need to confirm one key piece of information: what type of activity difficulty do you primarily want to overcome?";
+      : "I need to understand the daily challenge first: what activity are you trying to do, and what makes it difficult?";
 
-  const needProfile = normalizeNeedProfile(
-    value.needProfile || previousProfile,
-  );
+  const needProfile = normalizeNeedProfile(value.needProfile, previousProfile);
 
-  let readyForInternalSearch =
+  const modelReady =
     typeof value.readyForInternalSearch === "boolean"
       ? value.readyForInternalSearch
       : inferReadyForSearch(needProfile);
 
-  // Hard floor: never hand off before the user has answered enough.
-  if (userTurns < MIN_USER_TURNS_BEFORE_SEARCH) {
-    readyForInternalSearch = false;
-  }
+  const readyForInternalSearch = modelReady && inferReadyForSearch(needProfile);
 
   const handoffReason =
     readyForInternalSearch &&
@@ -291,11 +358,12 @@ function normalizeIntakeResponse(
         ? buildDefaultHandoffReason(needProfile)
         : "";
 
-  const missingInformation = normalizeStringArray(value.missingInformation);
-  const suggestedReplies = normalizeStringArray(value.suggestedReplies).slice(
-    0,
-    4,
+  const missingInformation = normalizeStringArray(
+    value.missingInformation,
+    inferMissingInformation(needProfile),
   );
+
+  const suggestedReplies = normalizeStringArray(value.suggestedReplies).slice(0, 4);
 
   return {
     assistantMessage,
@@ -307,62 +375,228 @@ function normalizeIntakeResponse(
   };
 }
 
-function normalizeNeedProfile(input: unknown): NeedProfile {
+function normalizeNeedProfile(
+  input: unknown,
+  previousProfile: NeedProfile = fallbackNeedProfile,
+): NeedProfile {
   const value =
-    input && typeof input === "object"
-      ? (input as Record<string, unknown>)
+    input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+
+  const locationValue =
+    value.location && typeof value.location === "object"
+      ? (value.location as Record<string, unknown>)
       : {};
 
   return {
-    activity:
-      typeof value.activity === "string" && value.activity.trim()
-        ? value.activity.trim()
-        : fallbackNeedProfile.activity,
+    activity: getString(value.activity, previousProfile.activity),
+    problem: getString(value.problem, previousProfile.problem),
+    desiredOutcome: getString(value.desiredOutcome, previousProfile.desiredOutcome),
 
-    problem:
-      typeof value.problem === "string" && value.problem.trim()
-        ? value.problem.trim()
-        : fallbackNeedProfile.problem,
+    seekerRole: normalizeSeekerRole(value.seekerRole, previousProfile.seekerRole),
+    userAge: getString(value.userAge, previousProfile.userAge),
 
-    userContext: normalizeStringArray(value.userContext),
-    environment: normalizeStringArray(value.environment),
-    mustHave: normalizeStringArray(value.mustHave),
-    mustAvoid: normalizeStringArray(value.mustAvoid),
-    safetyConcerns: normalizeStringArray(value.safetyConcerns),
-    preferences: normalizeStringArray(value.preferences),
-    unknowns: normalizeStringArray(value.unknowns),
-    searchDirections: normalizeStringArray(value.searchDirections),
+    location: {
+      country: getString(locationValue.country, previousProfile.location.country),
+      cityOrRegion: getString(
+        locationValue.cityOrRegion,
+        previousProfile.location.cityOrRegion,
+      ),
+    },
+
+    userContext: normalizeStringArray(value.userContext, previousProfile.userContext),
+    bodyFunction: normalizeStringArray(value.bodyFunction, previousProfile.bodyFunction),
+    currentDevices: normalizeStringArray(
+      value.currentDevices,
+      previousProfile.currentDevices,
+    ),
+    environment: normalizeStringArray(value.environment, previousProfile.environment),
+
+    mustHave: normalizeStringArray(value.mustHave, previousProfile.mustHave),
+    mustAvoid: normalizeStringArray(value.mustAvoid, previousProfile.mustAvoid),
+    safetyConcerns: normalizeStringArray(
+      value.safetyConcerns,
+      previousProfile.safetyConcerns,
+    ),
+    preferences: normalizeStringArray(value.preferences, previousProfile.preferences),
+
+    unknowns: normalizeStringArray(value.unknowns, previousProfile.unknowns),
+    searchDirections: normalizeStringArray(
+      value.searchDirections,
+      previousProfile.searchDirections,
+    ),
   };
 }
 
 function inferReadyForSearch(profile: NeedProfile) {
-  const hasActivity = Boolean(
-    profile.activity && profile.activity !== "unknown activity",
-  );
-  const hasProblem = Boolean(
-    profile.problem && profile.problem !== "unknown problem",
-  );
+  const hasActivity = hasKnownText(profile.activity, ["unknown activity"]);
+  const hasProblem = hasKnownText(profile.problem, ["unknown problem"]);
+  const hasDesiredOutcome = hasKnownText(profile.desiredOutcome, [
+    "unknown desired outcome",
+  ]);
+
+  const hasRole = profile.seekerRole !== "unknown";
+  const hasAge = hasKnownText(profile.userAge);
+  const hasLocation =
+    hasKnownText(profile.location.country) ||
+    hasKnownText(profile.location.cityOrRegion);
+
+  const hasContext =
+    profile.userContext.length > 0 ||
+    profile.bodyFunction.length > 0 ||
+    profile.currentDevices.length > 0;
+
   const hasEnvironment = profile.environment.length > 0;
-  const hasContext = profile.userContext.length > 0;
+
   const hasCriteria =
     profile.mustHave.length > 0 ||
     profile.mustAvoid.length > 0 ||
+    profile.safetyConcerns.length > 0 ||
+    profile.preferences.length > 0 ||
     profile.searchDirections.length > 0;
 
-  return hasActivity && hasProblem && hasEnvironment && hasContext && hasCriteria;
+  return (
+    hasActivity &&
+    hasProblem &&
+    hasDesiredOutcome &&
+    hasRole &&
+    hasAge &&
+    hasLocation &&
+    hasContext &&
+    hasEnvironment &&
+    hasCriteria
+  );
+}
+
+function inferMissingInformation(profile: NeedProfile) {
+  const missing: string[] = [];
+
+  if (!hasKnownText(profile.activity, ["unknown activity"])) {
+    missing.push("daily activity");
+  }
+
+  if (!hasKnownText(profile.problem, ["unknown problem"])) {
+    missing.push("main difficulty or barrier");
+  }
+
+  if (!hasKnownText(profile.desiredOutcome, ["unknown desired outcome"])) {
+    missing.push("desired outcome");
+  }
+
+  if (profile.seekerRole === "unknown") {
+    missing.push("whether this is for the user, caregiver, TOM staff, clinician, or someone else");
+  }
+
+  if (!hasKnownText(profile.userAge)) {
+    missing.push("age or age range");
+  }
+
+  if (
+    !hasKnownText(profile.location.country) &&
+    !hasKnownText(profile.location.cityOrRegion)
+  ) {
+    missing.push("country or region");
+  }
+
+  if (
+    profile.userContext.length === 0 &&
+    profile.bodyFunction.length === 0 &&
+    profile.currentDevices.length === 0
+  ) {
+    missing.push("relevant body ability, disability, current device, or care context");
+  }
+
+  if (profile.environment.length === 0) {
+    missing.push("where the solution will be used");
+  }
+
+  if (
+    profile.mustHave.length === 0 &&
+    profile.mustAvoid.length === 0 &&
+    profile.safetyConcerns.length === 0 &&
+    profile.preferences.length === 0 &&
+    profile.searchDirections.length === 0
+  ) {
+    missing.push("solution constraints or preferences");
+  }
+
+  return missing;
 }
 
 function buildDefaultHandoffReason(profile: NeedProfile) {
-  return `I understand that you want to address difficulties with "${profile.activity}", primarily focusing on the issue of "${profile.problem}". I can use this information to start searching for relevant projects.`;
+  const location = [profile.location.cityOrRegion, profile.location.country]
+    .filter(Boolean)
+    .join(", ");
+
+  return `I understand the need as: ${profile.activity}. The main difficulty is: ${profile.problem}. The desired outcome is: ${profile.desiredOutcome}.${location ? ` Location: ${location}.` : ""} I can now start searching for relevant TOM, DIY, open-source, commercial, and adjacent solutions.`;
 }
 
-function normalizeStringArray(input: unknown): string[] {
-  if (!Array.isArray(input)) return [];
+function getString(input: unknown, fallback = "") {
+  return typeof input === "string" && input.trim() ? input.trim() : fallback;
+}
 
-  return input
+function normalizeSeekerRole(input: unknown, fallback: SeekerRole = "unknown"): SeekerRole {
+  if (typeof input !== "string") return fallback;
+
+  const normalized = input.trim().toLowerCase();
+
+  if (normalized === "self" || normalized.includes("myself") || normalized.includes("for me")) {
+    return "self";
+  }
+
+  if (normalized === "caregiver" || normalized.includes("caregiver") || normalized.includes("parent")) {
+    return "caregiver";
+  }
+
+  if (
+    normalized === "tom staff" ||
+    normalized === "tom_staff" ||
+    normalized.includes("tom")
+  ) {
+    return "TOM staff";
+  }
+
+  if (
+    normalized === "clinician" ||
+    normalized.includes("doctor") ||
+    normalized.includes("therapist") ||
+    normalized.includes("clinician")
+  ) {
+    return "clinician";
+  }
+
+  if (normalized === "other") return "other";
+  if (normalized === "unknown") return "unknown";
+
+  return fallback === "unknown" ? "other" : fallback;
+}
+
+function normalizeStringArray(input: unknown, fallback: string[] = []): string[] {
+  if (!Array.isArray(input)) return fallback;
+
+  const cleaned = input
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter(Boolean);
+
+  if (!cleaned.length) return fallback;
+
+  return Array.from(new Set(cleaned));
+}
+
+function hasKnownText(value: string, invalidValues: string[] = []) {
+  if (!value || !value.trim()) return false;
+
+  const normalized = value.trim().toLowerCase();
+
+  if (
+    normalized === "unknown" ||
+    normalized === "not specified" ||
+    normalized === "n/a"
+  ) {
+    return false;
+  }
+
+  return !invalidValues.some((invalid) => normalized === invalid.toLowerCase());
 }
 
 function safeParseJson(text: string): unknown {
