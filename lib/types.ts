@@ -83,14 +83,16 @@ export type EvaluationDimension = {
 export type CandidateEvaluation = {
   overallScore: number;
 
-  // TOM official judging dimensions / internal review dimensions
-  innovation: EvaluationDimension;
-  qualityOfSolution: EvaluationDimension;
-  accessibility: EvaluationDimension;
-  affordability: EvaluationDimension;
-  documentation: EvaluationDimension;
-  impact: EvaluationDimension;
+  // AT fit assessment dimensions, not competition judging dimensions.
+  needFit: EvaluationDimension;
+  criticalRequirements: EvaluationDimension;
+  contextFit: EvaluationDimension;
+  accessPathway: EvaluationDimension;
+  adaptationFeasibility: EvaluationDimension;
+  evidenceQuality: EvaluationDimension;
+  safetyAndRisk: EvaluationDimension;
 
+  hardFailures: string[];
   matchedCriteria: string[];
   unmatchedCriteria: string[];
   missingInformation: string[];
@@ -200,12 +202,14 @@ export function emptyEvaluationDimension(): EvaluationDimension {
 export function emptyCandidateEvaluation(): CandidateEvaluation {
   return {
     overallScore: 0,
-    innovation: emptyEvaluationDimension(),
-    qualityOfSolution: emptyEvaluationDimension(),
-    accessibility: emptyEvaluationDimension(),
-    affordability: emptyEvaluationDimension(),
-    documentation: emptyEvaluationDimension(),
-    impact: emptyEvaluationDimension(),
+    needFit: emptyEvaluationDimension(),
+    criticalRequirements: emptyEvaluationDimension(),
+    contextFit: emptyEvaluationDimension(),
+    accessPathway: emptyEvaluationDimension(),
+    adaptationFeasibility: emptyEvaluationDimension(),
+    evidenceQuality: emptyEvaluationDimension(),
+    safetyAndRisk: emptyEvaluationDimension(),
+    hardFailures: [],
     matchedCriteria: [],
     unmatchedCriteria: [],
     missingInformation: [],

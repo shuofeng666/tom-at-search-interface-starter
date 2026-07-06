@@ -223,13 +223,15 @@ function mapRejectionToCriterion(reason: string): Partial<NeedProfile> {
         searchDirections: ["locally manufacturable assistive technology"],
       };
 
-    case "poor-documentation":
-      return {
-        mustHave: ["clear documentation"],
-        mustAvoid: ["missing build instructions"],
-        searchDirections: ["open source assistive technology documentation CAD STL"],
-      };
-
+    case "poor-evidence":
+  return {
+    mustHave: ["clear evidence, build files, or product specifications"],
+    mustAvoid: ["missing build instructions or unclear product details"],
+    searchDirections: [
+      "open source assistive technology build files CAD STL instructions",
+      "assistive technology product specifications reviews"
+    ],
+  };
     default:
       return {
         mustAvoid: [reason],

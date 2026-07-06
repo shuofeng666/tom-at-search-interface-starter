@@ -22,6 +22,7 @@ type SearchPoolResponse = {
 const PAGE_SIZE = 8;
 
 const MIN_VISIBLE_SCORE = 1;
+const MIN_VISIBLE_TOM_SCORE = 1.5;
 
 function isTomCandidate(candidate: CandidateProject) {
   const sourceText = `${candidate.source} ${candidate.url} ${candidate.sourceType}`.toLowerCase();
@@ -32,11 +33,97 @@ function isTomCandidate(candidate: CandidateProject) {
   );
 }
 
-function isVisibleCandidate(candidate: CandidateProject) {
-  if (isTomCandidate(candidate)) return true;
-
-  return (candidate.evaluation?.overallScore ?? 0) >= MIN_VISIBLE_SCORE;
+function evaluationText(candidate: CandidateProject) {
+  return [
+    candidate.evaluation?.needFit?.explanation,
+    candidate.evaluation?.criticalRequirements?.explanation,
+    candidate.evaluation?.contextFit?.explanation,
+    candidate.evaluation?.accessPathway?.explanation,
+    candidate.evaluation?.adaptationFeasibility?.explanation,
+    candidate.evaluation?.evidenceQuality?.explanation,
+    candidate.evaluation?.safetyAndRisk?.explanation,
+    candidate.evaluation?.pathwayReason,
+    ...(candidate.evaluation?.hardFailures || []),
+    ...(candidate.evaluation?.matchedCriteria || []),
+    ...(candidate.evaluation?.unmatchedCriteria || []),
+    ...(candidate.evaluation?.riskFlags || [])
+  ]
+    .join(" ")
+    .toLowerCase();
 }
+
+function isClearlyBadMatch(candidate: CandidateProject) {
+  const text = evaluationText(candidate);
+
+  return (
+    text.includes("completely unrelated") ||
+    text.includes("does not address") ||
+    text.includes("does not meet") ||
+    text.includes("does not match") ||
+    text.includes("contrary to the need") ||
+    text.includes("not an actual solution") ||
+    text.includes("non-solution") ||
+    text.includes("weak fit") ||
+    text.includes("very low") ||
+    text.includes("no individual impact")
+  );
+}
+
+function isVisibleCandidate(candidate: CandidateProject) {
+  const score = candidate.evaluation?.overallScore ?? 0;
+
+  if (isTomCandidate(candidate)) {
+    return score >= MIN_VISIBLE_TOM_SCORE && !isClearlyBadMatch(candidate);
+  }
+
+  return score >= MIN_VISIBLE_SCORE;
+}
+
+function candidateDisplayScore(candidate: CandidateProject) {
+  const score = candidate.evaluation?.overallScore ?? 0;
+  const tomTieBreaker = isTomCandidate(candidate) ? 0.15 : 0;
+  const badMatchPenalty = isClearlyBadMatch(candidate) ? 4 : 0;
+
+  return score + tomTieBreaker - badMatchPenalty;
+}
+
+function sortDisplayCandidates(candidates: CandidateProject[]) {
+  return [...candidates].sort(
+    (a, b) => candidateDisplayScore(b) - candidateDisplayScore(a)
+  );
+}
+
+function prepareVisibleCandidates(scored: CandidateProject[]) {
+  return sortDisplayCandidates(scored.filter(isVisibleCandidate));
+}
+
+function fitHeading(candidate: CandidateProject) {
+  const score = candidate.evaluation?.overallScore ?? 0;
+
+  if (score >= MIN_VISIBLE_TOM_SCORE && !isClearlyBadMatch(candidate)) {
+    return "Why it may help";
+  }
+
+  return "Fit assessment";
+}
+
+function fitAssessmentText(candidate: CandidateProject) {
+  return (
+    candidate.evaluation.needFit.explanation ||
+    candidate.evaluation.pathwayReason ||
+    candidate.summary
+  );
+}
+
+function adaptationText(candidate: CandidateProject) {
+  return (
+    candidate.evaluation.adaptationFeasibility.explanation ||
+    "No adaptation assessment available yet."
+  );
+}
+
+
+
 
 const rejectionOptions = [
   { value: "requires-hand-use", label: "requires too much hand use" },
@@ -47,7 +134,7 @@ const rejectionOptions = [
   { value: "too-expensive", label: "too expensive" },
   { value: "not-portable", label: "not portable" },
   { value: "not-available", label: "not available locally" },
-  { value: "poor-documentation", label: "documentation is incomplete" },
+{ value: "poor-evidence", label: "evidence or build info is incomplete" },
 ];
 
 export default function Home() {
@@ -215,7 +302,7 @@ export default function Home() {
       // Score only the first page; the rest waits behind "Load more".
       const firstBatch = fetchedPool.slice(0, PAGE_SIZE);
       const scored = await scoreBatch(firstBatch);
-      const visibleScored = scored.filter(isVisibleCandidate);
+      const visibleScored = prepareVisibleCandidates(scored);
 
       setCandidates(visibleScored);
       setPoolCursor(firstBatch.length);
@@ -240,10 +327,12 @@ export default function Home() {
 
     try {
       const nextBatch = pool.slice(poolCursor, poolCursor + PAGE_SIZE);
-      const scored = await scoreBatch(nextBatch);
-      const visibleScored = scored.filter(isVisibleCandidate);
+const scored = await scoreBatch(nextBatch);
+const visibleScored = prepareVisibleCandidates(scored);
 
-      setCandidates((previous) => [...previous, ...visibleScored]);
+setCandidates((previous) =>
+  sortDisplayCandidates([...previous, ...visibleScored])
+);
       setPoolCursor((previous) => previous + nextBatch.length);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Load more failed.";
@@ -1003,10 +1092,15 @@ function CandidateDetail({
         />
       )}
 
-      <div className="evalBlock">
-        <h4>Why it may help</h4>
-        <p>{evaluation.impact.explanation}</p>
-      </div>
+<div className="evalBlock">
+  <h4>{fitHeading(candidate)}</h4>
+  <p>{fitAssessmentText(candidate)}</p>
+</div>
+
+<div className="evalBlock">
+  <h4>Can it be adapted?</h4>
+  <p>{adaptationText(candidate)}</p>
+</div>
 
       <div className="evalBlock">
         <h4>What to check</h4>
@@ -1072,26 +1166,34 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
     <div className="comparisonTableWrap">
       <table className="comparisonTable">
         <thead>
-          <tr>
-            <th>Project</th>
-            <th>Type</th>
-            <th>Why it may help</th>
-            <th>What to check</th>
-          </tr>
+<tr>
+  <th>Project</th>
+  <th>Type</th>
+  <th>Fit assessment</th>
+  <th>Adaptation / access</th>
+  <th>What to check</th>
+</tr>
         </thead>
 
         <tbody>
           {candidates.map((candidate) => (
-            <tr key={candidate.id}>
-              <td>{candidate.title}</td>
-              <td>{candidate.sourceType}</td>
-              <td>{candidate.evaluation.impact.explanation}</td>
-              <td>
-                {candidate.evaluation.missingInformation
-                  .slice(0, 2)
-                  .join(", ") || "No major unknowns"}
-              </td>
-            </tr>
+           <tr key={candidate.id}>
+  <td>{candidate.title}</td>
+  <td>{candidate.sourceType}</td>
+  <td>{fitAssessmentText(candidate)}</td>
+  <td>
+    {candidate.evaluation.adaptationFeasibility.explanation ||
+      candidate.evaluation.accessPathway.explanation ||
+      "No adaptation or access assessment available."}
+  </td>
+  <td>
+    {candidate.evaluation.missingInformation
+      .slice(0, 2)
+      .join(", ") || "No major unknowns"}
+  </td>
+</tr>
+
+           
           ))}
         </tbody>
       </table>
@@ -1151,9 +1253,13 @@ function UserFacingCard({ candidate }: { candidate: CandidateProject }) {
       <h3>{candidate.title}</h3>
       <p>{candidate.summary}</p>
 
-      <p className="small">
-        <b>Why it may help:</b> {candidate.evaluation.impact.explanation}
-      </p>
+<p className="small">
+  <b>Fit assessment:</b> {fitAssessmentText(candidate)}
+</p>
+
+<p className="small">
+  <b>Adaptation possibility:</b> {adaptationText(candidate)}
+</p>
 
       <p className="small">
         <b>What TOM should check:</b>{" "}

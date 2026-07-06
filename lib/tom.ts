@@ -3,6 +3,7 @@ import {
   emptyCandidateEvaluation,
   NeedProfile
 } from "./types";
+import { generateGeminiJson, toStringArray } from "./gemini";
 
 type TomSearchResponse = {
   projects?: {
@@ -32,6 +33,8 @@ type TomProject = {
 };
 
 const MIN_TOM_RESULTS = 3;
+const MIN_FALLBACK_LOCAL_SCORE = 3;
+const MAX_KEYWORD_QUERIES = 8;
 
 export async function searchTomProjects({
   needProfile,
@@ -47,99 +50,241 @@ export async function searchTomProjects({
     return [];
   }
 
-  const queries = buildTomSearchQueries(needProfile);
+  const expandedTerms = await expandTomSearchTerms(needProfile);
+  const heuristicTerms = buildTomSearchTerms(needProfile);
 
-  if (!queries.length) {
-    console.warn("No usable TOM search query. TOM projects will be skipped.");
-    return [];
-  }
+  const keywordQueries = dedupeTerms([
+    ...expandedTerms,
+    ...heuristicTerms
+  ]).slice(0, MAX_KEYWORD_QUERIES);
 
-  let collected: CandidateProject[] = [];
+  console.log("TOM keyword queries", {
+    fromLLM: expandedTerms,
+    fromHeuristic: heuristicTerms,
+    used: keywordQueries
+  });
 
-  for (const userInput of queries) {
-    const candidates = await fetchTomProjectCandidates({
+  const keywordBatches = await Promise.all(
+    keywordQueries.map((userInput) =>
+      fetchTomProjectCandidates({ endpoint, userInput, limit })
+    )
+  );
+
+  const keywordMatched = mergeTomCandidates(keywordBatches.flat(), []);
+
+  let merged = keywordMatched;
+
+  if (merged.length < MIN_TOM_RESULTS) {
+    const broadBatch = await fetchTomProjectCandidates({
       endpoint,
-      userInput,
+      userInput: "",
       limit
     });
 
-    collected = mergeTomCandidates(collected, candidates);
+    const fallbackRanked = rankTomCandidatesByNeed(
+      broadBatch,
+      needProfile,
+      expandedTerms
+    ).filter((candidate) => {
+      return (
+        scoreTomCandidate(
+          candidate,
+          buildTomKeywords(needProfile),
+          expandedTerms
+        ) >= MIN_FALLBACK_LOCAL_SCORE
+      );
+    });
 
-    if (collected.length >= MIN_TOM_RESULTS) {
-      break;
-    }
+    merged = mergeTomCandidates(merged, fallbackRanked);
   }
 
-  return rankTomCandidatesByNeed(collected, needProfile).slice(0, limit);
+  const ranked = rankTomCandidatesByNeed(merged, needProfile, expandedTerms);
+
+  console.log("TOM merged/ranked results", {
+    keywordMatched: keywordMatched.length,
+    returned: ranked.slice(0, limit).length
+  });
+
+  return ranked.slice(0, limit);
 }
 
-function buildTomSearchQueries(needProfile: NeedProfile) {
-  const specificQuery = buildCleanQuery([
-    needProfile.activity,
-    needProfile.desiredOutcome,
-    ...needProfile.currentDevices,
-    ...needProfile.mustHave
-  ]);
+/**
+ * Short, high-recall search terms. TOM search works best with single nouns
+ * ("wheelchair", "walker", "grip") or two-word device names.
+ */
+function buildTomSearchTerms(needProfile: NeedProfile): string[] {
+  const terms: string[] = [];
 
-  const deviceQuery = buildCleanQuery([
-    ...needProfile.currentDevices,
-    ...needProfile.bodyFunction,
-    ...needProfile.mustHave
-  ]);
+  const push = (term: string | undefined) => {
+    const clean = (term || "").trim().toLowerCase();
+    if (!clean) return;
+    if (clean.length < 3 || clean.length > 40) return;
+    if (GENERIC_TERMS.has(clean)) return;
+    if (!terms.includes(clean)) terms.push(clean);
+  };
 
-  const problemQuery = buildCleanQuery([
-    needProfile.activity,
-    needProfile.problem,
-    ...needProfile.currentDevices
-  ]);
+  // 1) Device names are the strongest signal: use the full phrase AND its
+  //    head noun ("manual wheelchair" -> "manual wheelchair", "wheelchair").
+  for (const device of needProfile.currentDevices) {
+    push(device);
+    const words = device.trim().split(/\s+/);
+    if (words.length > 1) push(words[words.length - 1]);
+  }
 
-  return Array.from(
-    new Set([specificQuery, deviceQuery, problemQuery].filter(Boolean))
-  );
+  // 2) Body function terms often map to TOM categories ("grip", "hand").
+  for (const fn of needProfile.bodyFunction) {
+    const words = fn.trim().split(/\s+/);
+    if (words.length <= 2) push(fn);
+    for (const word of words) push(word);
+  }
+
+  // 3) High-value single words from the rest of the profile.
+  for (const keyword of buildTomKeywords(needProfile)) {
+    push(keyword);
+  }
+
+  return terms.slice(0, MAX_KEYWORD_QUERIES);
 }
 
-function buildCleanQuery(parts: string[]) {
-  return parts
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter(
-      (part) =>
-        part !== "unknown activity" &&
-        part !== "unknown problem" &&
-        part !== "unknown desired outcome"
-    )
-    .join(" ")
-    .slice(0, 160);
-}
+// Words that are true but useless as TOM search terms.
+const GENERIC_TERMS = new Set([
+  "device",
+  "devices",
+  "solution",
+  "assistive",
+  "adaptive",
+  "technology",
+  "equipment",
+  "manual",
+  "electric",
+  "help",
+  "daily",
+  "independence",
+  "independent",
+  "unknown",
+  "none"
+]);
 
 function rankTomCandidatesByNeed(
   candidates: CandidateProject[],
-  needProfile: NeedProfile
+  needProfile: NeedProfile,
+  expandedTerms: string[] = []
 ) {
   const keywords = buildTomKeywords(needProfile);
 
-  if (!keywords.length) return candidates;
+  if (!keywords.length && !expandedTerms.length) return candidates;
 
   return [...candidates].sort((a, b) => {
-    return scoreTomCandidate(b, keywords) - scoreTomCandidate(a, keywords);
+    return (
+      scoreTomCandidate(b, keywords, expandedTerms) -
+      scoreTomCandidate(a, keywords, expandedTerms)
+    );
   });
 }
 
-function scoreTomCandidate(candidate: CandidateProject, keywords: string[]) {
-  const text = [
-    candidate.title,
-    candidate.summary,
-    candidate.rawText
-  ]
-    .join(" ")
-    .toLowerCase();
+function scoreTomCandidate(
+  candidate: CandidateProject,
+  keywords: string[],
+  expandedTerms: string[] = []
+) {
+  const title = candidate.title.toLowerCase();
+  const body = [candidate.summary, candidate.rawText].join(" ").toLowerCase();
 
-  return keywords.reduce((score, keyword) => {
-    return text.includes(keyword) ? score + 1 : score;
-  }, 0);
+  let score = 0;
+
+  // LLM-expanded category phrases are the strongest relevance signal:
+  // a title literally containing "cup holder" is almost certainly on-topic.
+  for (const term of expandedTerms) {
+    if (title.includes(term)) score += 6;
+    else if (body.includes(term)) score += 2;
+  }
+
+  for (const keyword of keywords) {
+    if (title.includes(keyword)) score += 3;
+    else if (body.includes(keyword)) score += 1;
+  }
+
+  return score;
 }
 
+/**
+ * One cheap Gemini call: need profile -> concrete device-category search
+ * terms. Cached per profile so "load more" / re-renders don't re-call it.
+ */
+const expansionCache = new Map<string, string[]>();
 
+async function expandTomSearchTerms(
+  needProfile: NeedProfile
+): Promise<string[]> {
+  const cacheKey = JSON.stringify([
+    needProfile.activity,
+    needProfile.problem,
+    needProfile.desiredOutcome,
+    needProfile.currentDevices,
+    needProfile.bodyFunction,
+    needProfile.mustHave
+  ]);
+
+  const cached = expansionCache.get(cacheKey);
+  if (cached) return cached;
+
+  const prompt = [
+    "You translate an assistive-technology need into search keywords for a",
+    "small database (~1000 items) of open-source maker projects. The",
+    "database search only matches short literal keywords against project",
+    "titles and descriptions.",
+    "",
+    "Return JSON: {\"terms\": [...]} with 5-8 search terms. Rules:",
+    "- Each term is 1-3 words, lowercase, English.",
+    "- Each term names a CONCRETE product/device category, attachment, or",
+    "  mechanism that could solve the need. Include synonyms.",
+    "- Think like a maker naming a project, not like the user describing",
+    "  the problem.",
+    "",
+    "Example need: 'hold a phone or a drink hands-free while propelling a",
+    "manual wheelchair' ->",
+    "{\"terms\": [\"cup holder\", \"phone mount\", \"phone holder\",",
+    "\"bottle holder\", \"wheelchair attachment\", \"wheelchair tray\"]}",
+    "",
+    "Need profile:",
+    `- activity: ${needProfile.activity}`,
+    `- problem: ${needProfile.problem}`,
+    `- desired outcome: ${needProfile.desiredOutcome}`,
+    `- current devices: ${needProfile.currentDevices.join(", ") || "none"}`,
+    `- body function: ${needProfile.bodyFunction.join(", ") || "unknown"}`,
+    `- must have: ${needProfile.mustHave.join(", ") || "none"}`
+  ].join("\n");
+
+  try {
+    const parsed = await generateGeminiJson<{ terms?: unknown }>({
+      prompt,
+      temperature: 0.3
+    });
+
+    const terms = toStringArray(parsed?.terms)
+      .map((term) => term.toLowerCase().trim())
+      .filter((term) => term.length >= 3 && term.length <= 30)
+      .slice(0, 8);
+
+    expansionCache.set(cacheKey, terms);
+    return terms;
+  } catch (error) {
+    console.error("TOM query expansion failed, using heuristics only", error);
+    return [];
+  }
+}
+
+function dedupeTerms(terms: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of terms) {
+    const term = raw.toLowerCase().trim();
+    if (!term || seen.has(term)) continue;
+    seen.add(term);
+    out.push(term);
+  }
+  return out;
+}
 
 function buildTomKeywords(needProfile: NeedProfile) {
   const rawText = [
@@ -173,7 +318,10 @@ function buildTomKeywords(needProfile: NeedProfile) {
     "using",
     "easy",
     "attach",
-    "remove"
+    "remove",
+    "when",
+    "while",
+    "unknown"
   ]);
 
   return Array.from(
@@ -197,38 +345,40 @@ async function fetchTomProjectCandidates({
   userInput: string;
   limit: number;
 }): Promise<CandidateProject[]> {
-  const url = new URL(endpoint);
+  try {
+    const url = new URL(endpoint);
 
-  url.searchParams.set("skip", "0");
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("selectedTypes", "5");
-url.searchParams.set("userInput", userInput);
+    url.searchParams.set("skip", "0");
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("selectedTypes", "5");
+    url.searchParams.set("userInput", userInput);
 
-  const res = await fetch(url.toString(), {
-    headers: {
-      Accept: "application/json"
-    },
-    cache: "no-store"
-  });
+    const res = await fetch(url.toString(), {
+      headers: {
+        Accept: "application/json"
+      },
+      cache: "no-store"
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("TOM API error:", text);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("TOM API error:", res.status, text.slice(0, 300));
+      return [];
+    }
+
+    const data = (await res.json()) as TomSearchResponse;
+    const items = data.projects?.items || [];
+
+    console.log(
+      `TOM query "${userInput || "(broad fallback)"}" ->`,
+      items.map((item) => item.projectName || item.challengeName)
+    );
+
+    return items.map(buildTomCandidate);
+  } catch (error) {
+    console.error("TOM fetch failed for query:", userInput, error);
     return [];
   }
-
-  const data = (await res.json()) as TomSearchResponse;
-  const items = data.projects?.items || [];
-
-  console.log(
-    "TOM official project results",
-    items.map((item) => ({
-      id: item._id,
-      title: item.projectName || item.challengeName
-    }))
-  );
-
-  return items.map(buildTomCandidate);
 }
 
 function buildTomCandidate(project: TomProject): CandidateProject {
@@ -276,27 +426,6 @@ function buildTomCandidate(project: TomProject): CandidateProject {
     rawText,
     evaluation: emptyCandidateEvaluation()
   };
-}
-
-function buildTomUserInput(needProfile: NeedProfile) {
-  const parts = [
-    needProfile.activity,
-    needProfile.desiredOutcome,
-    ...needProfile.currentDevices,
-    ...needProfile.mustHave
-  ];
-
-  return parts
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter(
-      (part) =>
-        part !== "unknown activity" &&
-        part !== "unknown problem" &&
-        part !== "unknown desired outcome"
-    )
-    .join(" ")
-    .slice(0, 160);
 }
 
 function mergeTomCandidates(

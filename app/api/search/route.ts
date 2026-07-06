@@ -6,13 +6,15 @@ import { CandidateProject, NeedProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-// Phase 1: FETCH ONLY (fast, no LLM). Pull a few results from each source and
-// return the whole unscored pool. The frontend scores it in pages via
-// /api/evaluate and reveals more with "Load more".
-const TOM_LIMIT = 20;
+// Phase 1: FETCH ONLY. Pull a pool from TOM + external sources.
+// The frontend scores PAGE_SIZE candidates at a time via /api/evaluate.
+const TOM_LIMIT = 15;
 const PRIMARY_PER_DOMAIN = 0;
 const SECONDARY_PER_DOMAIN = 3;
-const COMMERCIAL_PER_DOMAIN = 2;
+const COMMERCIAL_PER_DOMAIN = 3;
+
+const FIRST_PAGE_SIZE = 8;
+const TOM_FIRST_PAGE_SLOTS = 3;
 
 export type SearchPoolResponse = {
   query: string;
@@ -29,7 +31,7 @@ export async function POST(req: NextRequest) {
     if (!needProfile) {
       return NextResponse.json(
         { error: "Missing needProfile." },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -37,9 +39,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "Missing EXA_API_KEY. Add it to .env.local and restart the dev server.",
+            "Missing EXA_API_KEY. Add it to .env.local and restart the dev server."
         },
-        { status: 500 },
+        { status: 500 }
       );
     }
 
@@ -48,26 +50,26 @@ export async function POST(req: NextRequest) {
     const [tomCandidates, externalResults] = await Promise.all([
       searchTomProjects({
         needProfile,
-        limit: TOM_LIMIT,
+        limit: TOM_LIMIT
       }),
       fetchPrioritizedPool({
         query,
         needProfile,
         primaryPerDomain: PRIMARY_PER_DOMAIN,
         secondaryPerDomain: SECONDARY_PER_DOMAIN,
-        commercialPerDomain: COMMERCIAL_PER_DOMAIN,
-      }),
+        commercialPerDomain: COMMERCIAL_PER_DOMAIN
+      })
     ]);
 
     const externalCandidates = buildCandidatesFromExa(externalResults);
 
-    const pool = [...tomCandidates, ...externalCandidates];
+    const pool = buildBalancedSearchPool(tomCandidates, externalCandidates);
 
     console.log("Search pool source counts", {
-  tom: tomCandidates.length,
-  external: externalCandidates.length,
-  total: pool.length
-});
+      tom: tomCandidates.length,
+      external: externalCandidates.length,
+      total: pool.length
+    });
 
     return NextResponse.json({ query, pool } satisfies SearchPoolResponse);
   } catch (error) {
@@ -75,7 +77,111 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       { error: "Search failed. Check the server console for the API error." },
-      { status: 500 },
+      { status: 500 }
     );
   }
+}
+
+function buildBalancedSearchPool(
+  tomCandidates: CandidateProject[],
+  externalCandidates: CandidateProject[]
+) {
+  // First page should include TOM, but TOM should not dominate the whole page.
+  const firstTom = tomCandidates.slice(0, TOM_FIRST_PAGE_SLOTS);
+  const firstExternal = externalCandidates.slice(
+    0,
+    FIRST_PAGE_SIZE - firstTom.length
+  );
+
+  const firstPage = interleaveOneTomThenExternal(firstTom, firstExternal);
+
+  const remainingTom = tomCandidates.slice(firstTom.length);
+  const remainingExternal = externalCandidates.slice(firstExternal.length);
+
+  const rest = interleaveByRatio({
+    tom: remainingTom,
+    external: remainingExternal,
+    tomEvery: 4
+  });
+
+  return dedupeCandidatesById([...firstPage, ...rest]);
+}
+
+function interleaveOneTomThenExternal(
+  tom: CandidateProject[],
+  external: CandidateProject[]
+) {
+  const result: CandidateProject[] = [];
+  let tomIndex = 0;
+  let externalIndex = 0;
+
+  while (tomIndex < tom.length || externalIndex < external.length) {
+    if (tomIndex < tom.length) {
+      result.push(tom[tomIndex]);
+      tomIndex += 1;
+    }
+
+    for (let i = 0; i < 2 && externalIndex < external.length; i += 1) {
+      result.push(external[externalIndex]);
+      externalIndex += 1;
+    }
+  }
+
+  return result.slice(0, FIRST_PAGE_SIZE);
+}
+
+function interleaveByRatio({
+  tom,
+  external,
+  tomEvery
+}: {
+  tom: CandidateProject[];
+  external: CandidateProject[];
+  tomEvery: number;
+}) {
+  const result: CandidateProject[] = [];
+  let tomIndex = 0;
+  let externalIndex = 0;
+
+  while (tomIndex < tom.length || externalIndex < external.length) {
+    for (
+      let i = 0;
+      i < tomEvery - 1 && externalIndex < external.length;
+      i += 1
+    ) {
+      result.push(external[externalIndex]);
+      externalIndex += 1;
+    }
+
+    if (tomIndex < tom.length) {
+      result.push(tom[tomIndex]);
+      tomIndex += 1;
+    }
+
+    if (externalIndex >= external.length && tomIndex < tom.length) {
+      result.push(...tom.slice(tomIndex));
+      break;
+    }
+
+    if (tomIndex >= tom.length && externalIndex < external.length) {
+      result.push(...external.slice(externalIndex));
+      break;
+    }
+  }
+
+  return result;
+}
+
+function dedupeCandidatesById(candidates: CandidateProject[]) {
+  const seen = new Set<string>();
+  const deduped: CandidateProject[] = [];
+
+  for (const candidate of candidates) {
+    if (seen.has(candidate.id)) continue;
+
+    seen.add(candidate.id);
+    deduped.push(candidate);
+  }
+
+  return deduped;
 }

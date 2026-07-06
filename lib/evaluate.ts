@@ -227,7 +227,11 @@ function buildEvaluationPrompt({
   rawText: string;
 }) {
   return `
-You are evaluating a search result for TOM, an organization that works on assistive technology projects.
+You are evaluating a search result for an assistive technology matching workflow.
+
+This is NOT a competition judging task. Do NOT evaluate whether the project is
+innovative or impressive. Evaluate whether this candidate is a practical fit for
+this specific Need Profile.
 
 Need Profile:
 ${JSON.stringify(needProfile, null, 2)}
@@ -245,57 +249,114 @@ ${JSON.stringify(
   2
 )}
 
-Evaluate the candidate using TOM's official Judging Criteria. Score ONLY these
-six criteria — do not invent additional dimensions.
-
 FIRST, decide what the candidate actually is:
-- A concrete assistive-technology SOLUTION = a specific device, product, build,
-  or project that a person could actually obtain or make to address a need.
-- NON-SOLUTION content = guidelines, judging criteria, rules, "about"/org pages,
-  category / listing / search-result pages, or blog/marketing posts that do not
-  contain an obtainable or buildable solution.
+- A concrete assistive-technology solution = a specific product, project, build,
+  downloadable design, or modifiable open-source artifact that a person could
+  buy, make, adapt, or ask a maker team to adapt.
+- Non-solution content = search pages, listing pages, organization pages,
+  blog posts, judging criteria, marketing pages, or general information without
+  a concrete obtainable/buildable/adaptable solution.
 
-If the candidate is NON-SOLUTION content, it CANNOT score well:
-- Set every dimension score to 0 or 1.
-- Set overallScore to 1 or below.
-- Set pathway to "reference only" or "not recommended yet".
-- Add "not an actual solution" to riskFlags.
+If it is non-solution content:
+- overallScore must be 1 or below.
+- pathway must be "reference only" or "not recommended yet".
+- Add "not an actual solution" to hardFailures and riskFlags.
 
-Do NOT give credit just because a page lists, defines, mentions, or "emphasizes"
-a criterion. A page that DEFINES "Documentation" as a judging criterion has not
-itself produced documentation of a solution. Score the SOLUTION ITSELF, not the
-page's talk about the criteria. If there is no solution, there is nothing to
-score highly.
+Evaluate using these dimensions from 0 to 3:
 
-1. innovation: How clearly innovative, novel, or surprising the solution is.
-2. qualityOfSolution: How well the solution is constructed — use of materials,
-   durability, and craftsmanship.
-3. accessibility: How easy it is to find the tools and materials used, and how
-   easy the solution is to make.
-4. affordability: How affordable the solution is to make (relative to a typical
-   geographical location).
-5. documentation: How well the solution is documented — how easy it is to
-   understand the tools, materials, and assembly steps needed to replicate it.
-6. impact: The potential to transform a single person's life (individual
-   impact) AND the potential to change the lives of many people around the
-   world (global impact). Consider how well it fits this Need Profile for the
-   individual side.
+0 = no evidence, not applicable, or fails the need
+1 = weak / indirect / only partially related
+2 = plausible fit but needs confirmation or adaptation
+3 = strong fit with clear evidence
 
-Use scores from 0 to 3:
-0 = no evidence or does not satisfy
-1 = weak / unclear / partial
-2 = mostly satisfies but needs confirmation or adaptation
-3 = strong fit with useful evidence
+Dimensions:
 
-Return ONLY valid JSON with this shape:
+1. needFit
+Does it directly address the user's activity, problem, and desired outcome?
+Focus on the actual use case, not keyword overlap.
+
+2. criticalRequirements
+Does it satisfy the user's hard requirements, must-haves, must-avoids, and
+safety constraints? Examples include hands-free use, easy attach/remove,
+wheelchair compatibility, age suitability, or avoiding hand use.
+
+Hard rule: if the candidate fails a critical must-have, it cannot be a strong
+recommendation even if it is well documented.
+
+3. contextFit
+Does it fit the user's real context: age, region/country, current devices,
+body function, environment, and usage situation? For example, a wheelchair user
+who needs both hands for propulsion has a different need than a user who only
+needs help gripping a cup while stationary.
+
+4. accessPathway
+How can the user realistically obtain it?
+- For commercial products: is it likely purchasable in the user's country or
+  region? Are sizing, price, shipping, and return uncertainty important?
+- For TOM projects: are files/resources/download links available? Is it realistic
+  for TOM or a maker team to fabricate it?
+- For open-source/DIY projects: are files, instructions, and materials accessible?
+
+5. adaptationFeasibility
+If it is not a perfect match, can it reasonably be modified to fit?
+This dimension applies to TOM projects, open-source projects, DIY projects, and
+commercial products.
+
+For TOM projects, explicitly assess whether an existing TOM solution could be
+adapted by a TOM maker team for this Need Profile.
+
+For open-source / DIY projects, assess whether there are modifiable files,
+3D models, CAD files, source code, BOM, assembly instructions, or a license that
+makes adaptation realistic.
+
+For commercial products, assess whether it can be adjusted, mounted, combined,
+or safely modified without unreasonable risk.
+
+6. evidenceQuality
+How much evidence supports this candidate? Consider photos, documentation,
+BOM, downloadable files, model files, product specs, reviews, user stories,
+measurements, installation instructions, and testing evidence.
+
+7. safetyAndRisk
+What safety risks or failure modes matter for this specific user? Consider
+wheelchair propulsion, braking, balance, visibility, attachment stability,
+weather exposure, choking/sharp edges, electrical risks, medical fit, and
+whether use could distract from safe mobility.
+
+Hard scoring rules:
+- Do not average away a hard failure.
+- If needFit is 0, overallScore must be 0.8 or below.
+- If criticalRequirements is 0, overallScore must be 1.2 or below.
+- If safetyAndRisk is 0 due to a serious safety issue, overallScore must be 1.0 or below.
+- If accessPathway is 0 because the user cannot realistically obtain/make it,
+  overallScore must be 1.5 or below.
+- If the candidate is only keyword-related but does not solve the actual need,
+  overallScore must be 1.2 or below.
+- A TOM project should be checked and valued as an official source, but it should
+  not be recommended solely because it is from TOM.
+- If a TOM project is related but not directly suitable, prefer "needs adaptation"
+  or "maker team review" rather than "can recommend".
+
+Pathway definitions:
+- "can recommend": strong fit, critical requirements met, no major safety or access concern.
+- "needs more information": plausible fit, but missing key size/context/access/safety info.
+- "reference only": useful inspiration, but not a direct solution.
+- "needs adaptation": direction is relevant but needs modification for this user.
+- "maker team review": TOM/maker expertise is needed to judge feasibility or safety.
+- "possible new TOM challenge": no adequate existing solution, but the need is clear.
+- "not recommended yet": clearly mismatched, inaccessible, unsafe, or not a real solution.
+
+Return ONLY valid JSON with this exact shape:
 {
   "overallScore": number,
-  "innovation": { "score": number, "explanation": "string", "evidence": ["string"] },
-  "qualityOfSolution": { "score": number, "explanation": "string", "evidence": ["string"] },
-  "accessibility": { "score": number, "explanation": "string", "evidence": ["string"] },
-  "affordability": { "score": number, "explanation": "string", "evidence": ["string"] },
-  "documentation": { "score": number, "explanation": "string", "evidence": ["string"] },
-  "impact": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "needFit": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "criticalRequirements": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "contextFit": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "accessPathway": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "adaptationFeasibility": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "evidenceQuality": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "safetyAndRisk": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "hardFailures": ["string"],
   "matchedCriteria": ["string"],
   "unmatchedCriteria": ["string"],
   "missingInformation": ["string"],
@@ -305,10 +366,10 @@ Return ONLY valid JSON with this shape:
 }
 
 Important:
-- Do not over-recommend.
-- If documentation is weak, say so.
-- If the result is only keyword-related, give a low impact score.
-- Mention missing information clearly.
+- Be strict about the specific Need Profile.
+- Do not say "may help" if the candidate fails the core need.
+- Mention age, location, current device, must-have requirements, and access pathway when relevant.
+- If the candidate could be adapted, explain exactly what adaptation would be needed.
 `;
 }
 
@@ -323,13 +384,24 @@ export function normalizeEvaluation(input: unknown): CandidateEvaluation {
         ? Math.max(0, Math.min(3, value.overallScore))
         : computeOverallFromDimensions(value),
 
-    innovation: normalizeDimension(value.innovation, empty.innovation),
-    qualityOfSolution: normalizeDimension(value.qualityOfSolution, empty.qualityOfSolution),
-    accessibility: normalizeDimension(value.accessibility, empty.accessibility),
-    affordability: normalizeDimension(value.affordability, empty.affordability),
-    documentation: normalizeDimension(value.documentation, empty.documentation),
-    impact: normalizeDimension(value.impact, empty.impact),
+    needFit: normalizeDimension(value.needFit, empty.needFit),
+    criticalRequirements: normalizeDimension(
+      value.criticalRequirements,
+      empty.criticalRequirements
+    ),
+    contextFit: normalizeDimension(value.contextFit, empty.contextFit),
+    accessPathway: normalizeDimension(value.accessPathway, empty.accessPathway),
+    adaptationFeasibility: normalizeDimension(
+      value.adaptationFeasibility,
+      empty.adaptationFeasibility
+    ),
+    evidenceQuality: normalizeDimension(
+      value.evidenceQuality,
+      empty.evidenceQuality
+    ),
+    safetyAndRisk: normalizeDimension(value.safetyAndRisk, empty.safetyAndRisk),
 
+    hardFailures: toStringArray(value.hardFailures),
     matchedCriteria: toStringArray(value.matchedCriteria),
     unmatchedCriteria: toStringArray(value.unmatchedCriteria),
     missingInformation: toStringArray(value.missingInformation),
@@ -346,7 +418,7 @@ export function normalizeEvaluation(input: unknown): CandidateEvaluation {
     evaluation.overallScore = computeWeightedOverall(evaluation);
   }
 
-  return evaluation;
+  return applyHardCaps(evaluation);
 }
 
 function normalizeDimension(input: unknown, fallback: EvaluationDimension): EvaluationDimension {
@@ -364,26 +436,121 @@ function normalizeDimension(input: unknown, fallback: EvaluationDimension): Eval
 }
 
 function computeWeightedOverall(evaluation: CandidateEvaluation) {
-  // TOM publishes the six criteria without weights, so we treat them equally.
-  const total =
-    evaluation.innovation.score +
-    evaluation.qualityOfSolution.score +
-    evaluation.accessibility.score +
-    evaluation.affordability.score +
-    evaluation.documentation.score +
-    evaluation.impact.score;
+  // AT matching should weight fit and hard requirements more than documentation.
+  const weightedTotal =
+    evaluation.needFit.score * 2 +
+    evaluation.criticalRequirements.score * 2 +
+    evaluation.contextFit.score * 1.5 +
+    evaluation.safetyAndRisk.score * 1.5 +
+    evaluation.accessPathway.score * 1 +
+    evaluation.adaptationFeasibility.score * 1 +
+    evaluation.evidenceQuality.score * 1;
 
-  return Math.round((total / 6) * 10) / 10;
+  const totalWeight = 10;
+
+  return Math.round((weightedTotal / totalWeight) * 10) / 10;
+}
+
+function applyHardCaps(evaluation: CandidateEvaluation): CandidateEvaluation {
+  let cappedScore = evaluation.overallScore;
+
+  if (evaluation.needFit.score === 0) {
+    cappedScore = Math.min(cappedScore, 0.8);
+  }
+
+  if (evaluation.criticalRequirements.score === 0) {
+    cappedScore = Math.min(cappedScore, 1.2);
+  }
+
+  if (evaluation.safetyAndRisk.score === 0) {
+    cappedScore = Math.min(cappedScore, 1.0);
+  }
+
+  if (evaluation.accessPathway.score === 0) {
+    cappedScore = Math.min(cappedScore, 1.5);
+  }
+
+  const hardText = [
+    ...evaluation.hardFailures,
+    ...evaluation.unmatchedCriteria,
+    ...evaluation.riskFlags,
+    evaluation.pathwayReason
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (
+    containsAny(hardText, [
+      "not an actual solution",
+      "non-solution",
+      "completely unrelated",
+      "does not address",
+      "does not solve",
+      "only keyword-related"
+    ])
+  ) {
+    cappedScore = Math.min(cappedScore, 0.8);
+  }
+
+  if (
+    containsAny(hardText, [
+      "fails a critical",
+      "critical must-have",
+      "does not meet the critical",
+      "does not satisfy the critical",
+      "hands-free",
+      "must-have"
+    ]) &&
+    evaluation.criticalRequirements.score <= 1
+  ) {
+    cappedScore = Math.min(cappedScore, 1.2);
+  }
+
+  if (
+    containsAny(hardText, [
+      "unsafe",
+      "safety risk",
+      "serious safety",
+      "could interfere with wheelchair",
+      "could interfere with braking",
+      "could interfere with propulsion"
+    ])
+  ) {
+    cappedScore = Math.min(cappedScore, 1.0);
+  }
+
+  if (
+    containsAny(hardText, [
+      "not available",
+      "cannot obtain",
+      "not purchasable",
+      "not enough information to obtain",
+      "no downloadable files",
+      "no fabrication files"
+    ])
+  ) {
+    cappedScore = Math.min(cappedScore, 1.5);
+  }
+
+  return {
+    ...evaluation,
+    overallScore: Math.round(Math.max(0, Math.min(3, cappedScore)) * 10) / 10
+  };
+}
+
+function containsAny(text: string, phrases: string[]) {
+  return phrases.some((phrase) => text.includes(phrase));
 }
 
 function computeOverallFromDimensions(value: Record<string, unknown>) {
   const dimensions = [
-    "innovation",
-    "qualityOfSolution",
-    "accessibility",
-    "affordability",
-    "documentation",
-    "impact"
+    "needFit",
+    "criticalRequirements",
+    "contextFit",
+    "accessPathway",
+    "adaptationFeasibility",
+    "evidenceQuality",
+    "safetyAndRisk"
   ];
 
   const scores = dimensions
@@ -396,7 +563,9 @@ function computeOverallFromDimensions(value: Record<string, unknown>) {
 
   if (!scores.length) return 0;
 
-  return Math.round((scores.reduce((sum, score) => sum + score, 0) / scores.length) * 10) / 10;
+  return Math.round(
+    (scores.reduce((sum, score) => sum + score, 0) / scores.length) * 10
+  ) / 10;
 }
 
 function normalizePathway(value: unknown): TomPathway {
