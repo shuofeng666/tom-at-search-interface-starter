@@ -8,7 +8,7 @@ import {
 export async function searchExaProjects({
   query,
   needProfile,
-  numResults = 8,
+  numResults = 15,
   includeDomainsOverride
 }: {
   query: string;
@@ -99,7 +99,7 @@ export async function fetchPoolPerDomain({
 export async function fetchPrioritizedPool({
   query,
   needProfile,
-  primaryPerDomain = 8,
+  primaryPerDomain = 15,
   secondaryPerDomain = 3,
   commercialPerDomain = 2
 }: {
@@ -114,10 +114,10 @@ export async function fetchPrioritizedPool({
   const commercialDomains = parseDomainList(process.env.EXA_COMMERCIAL_DOMAINS);
 
   console.log("EXA domain groups", {
-  primaryDomains,
-  secondaryDomains,
-  commercialDomains
-});
+    primaryDomains,
+    secondaryDomains,
+    commercialDomains
+  });
 
   const fetchDomainGroup = async (domains: string[], perDomain: number) => {
     if (!domains.length || perDomain <= 0) return [];
@@ -136,23 +136,33 @@ export async function fetchPrioritizedPool({
     return interleave(groups);
   };
 
-  const [primaryResults, secondaryResults, commercialResults] =
+  const [primaryResultsRaw, secondaryResults, commercialResults] =
     await Promise.all([
       fetchDomainGroup(primaryDomains, primaryPerDomain),
       fetchDomainGroup(secondaryDomains, secondaryPerDomain),
       fetchDomainGroup(commercialDomains, commercialPerDomain)
     ]);
 
-    console.log("EXA result counts", {
-  primary: primaryResults.length,
-  secondary: secondaryResults.length,
-  commercial: commercialResults.length
-});
+  const primaryResults = primaryResultsRaw.filter((result) =>
+    isTomProjectUrl(result.url || "")
+  );
 
-console.log(
-  "Primary TOM URLs",
-  primaryResults.map((result) => result.url)
-);
+  console.log(
+    "TOM primary raw results",
+    primaryResultsRaw.map((result) => result.url)
+  );
+
+  console.log(
+    "TOM primary project results",
+    primaryResults.map((result) => result.url)
+  );
+
+  console.log("EXA result counts", {
+    primaryRaw: primaryResultsRaw.length,
+    primaryProjects: primaryResults.length,
+    secondary: secondaryResults.length,
+    commercial: commercialResults.length
+  });
 
   const merged = [
     ...primaryResults,
@@ -161,6 +171,32 @@ console.log(
   ];
 
   return dedupeByUrl(merged);
+}
+
+function isTomProjectUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.replace(/^www\./, "");
+
+    return (
+      hostname === "tomglobal.org" &&
+      parsed.pathname === "/project" &&
+      parsed.searchParams.has("id")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isTomDomainUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.replace(/^www\./, "");
+
+    return hostname === "tomglobal.org";
+  } catch {
+    return false;
+  }
 }
 
 function dedupeByUrl(results: ExaSearchResult[]) {
@@ -257,13 +293,11 @@ export function buildSearchQuery(needProfile: NeedProfile, customQuery?: string)
 export function detectSourceType(url: string): CandidateSourceType {
   const lower = url.toLowerCase();
 
-  if (lower.includes("tomglobal.org")) {
+  if (isTomProjectUrl(url) || isTomDomainUrl(url)) {
     return "TOM project";
   }
 
-  if (lower.includes("instructables.com")) {
-    return "DIY project";
-  }
+  if (lower.includes("instructables.com")) return "DIY project";
 
   if (
     lower.includes("thingiverse.com") ||
