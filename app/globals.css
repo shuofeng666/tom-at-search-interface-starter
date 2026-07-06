@@ -928,3 +928,23 @@ a {
   line-height: 1.55;
   white-space: pre-wrap;
 }
+
+.inputActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.searchActionBtn {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.searchActionBtn:hover {
+  background: #e0e7ff;
+}

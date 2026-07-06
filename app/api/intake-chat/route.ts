@@ -1,4 +1,4 @@
-import { setGlobalDispatcher, ProxyAgent } from "undici";
+//import { setGlobalDispatcher, ProxyAgent } from "undici";
 import { NextRequest, NextResponse } from "next/server";
 import {
   ChatMessage,
@@ -8,11 +8,11 @@ import {
   emptyNeedProfile,
 } from "@/lib/types";
 
-const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+//const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 
-if (proxy) {
-  setGlobalDispatcher(new ProxyAgent(proxy));
-}
+//if (proxy) {
+//  setGlobalDispatcher(new ProxyAgent(proxy));
+//}
 
 export const runtime = "nodejs";
 
@@ -173,10 +173,16 @@ Examples:
 
 Conversation style:
 - Use the same language as the user.
-- If the user writes in Chinese, answer in Chinese.
-- If the user writes in Hebrew, answer in Hebrew.
 - Otherwise answer in English.
+- Sound like a friendly TOM intake helper, not a medical form, survey, or chatbot script.
 - Be warm, concise, and practical.
+- Avoid repetitive phrases like "Thanks for clarifying" on every turn.
+- Prefer natural transitions such as:
+  - "Got it — that helps."
+  - "That makes sense."
+  - "Okay, so the key issue is..."
+  - "I think I understand the situation better now."
+- Do not over-apologize.
 - Do not ask for the user's name unless it is useful for conversation. Name is optional.
 - Do not ask a long checklist.
 - Ask at most one concise follow-up question at a time.
@@ -205,6 +211,13 @@ Question priority:
 4. If context is missing, ask about body ability, current device, caregiver help, or environment.
 5. If age/location/seekerRole are missing, ask naturally and briefly.
 6. If enough is known, stop asking questions and summarize the challenge for search.
+
+Before asking any follow-up question:
+- First read the full conversation history and the Current Need Profile.
+- Do not ask for information that is already present in either place.
+- Ask only for the single most useful missing detail for search quality.
+- If the answer can be inferred with high confidence from the user's previous messages, update the Need Profile instead of asking again.
+- If enough information is already known, stop asking questions and produce the search handoff.
 
 Few-shot examples based on real TOM-style intake conversations.
 Use these as behavior patterns, not scripts.
@@ -324,7 +337,12 @@ Readiness rules:
 - Set readyForInternalSearch = false if seekerRole is unknown.
 - Set readyForInternalSearch = false if you only know an object/category but not the lived activity barrier.
 - Set readyForInternalSearch = true only when the structured profile is specific enough for internal search.
-- When readyForInternalSearch = true, stop asking questions and summarize the search-ready need.
+- When readyForInternalSearch = true, stop asking questions.
+- The assistantMessage should feel like a natural handoff, not a status label.
+- Do not say "Ready to search".
+- Say something like: "I think we have enough to start a useful search. I'll look for projects or solutions that..."
+- Keep the summary short: one sentence for the understood need, one sentence for the search direction.
+- Return suggestedReplies = [] when readyForInternalSearch = true.
 `;
 }
 
@@ -527,7 +545,7 @@ function buildDefaultHandoffReason(profile: NeedProfile) {
     .filter(Boolean)
     .join(", ");
 
-  return `I understand the need as: ${profile.activity}. The main difficulty is: ${profile.problem}. The desired outcome is: ${profile.desiredOutcome}.${location ? ` Location: ${location}.` : ""} I can now start searching for relevant TOM, DIY, open-source, commercial, and adjacent solutions.`;
+return `I think we have enough to start a useful search: the person wants to ${profile.activity}, but ${profile.problem}. The goal is to ${profile.desiredOutcome}.${location ? ` I'll also keep the location in mind: ${location}.` : ""}`;
 }
 
 function getString(input: unknown, fallback = "") {

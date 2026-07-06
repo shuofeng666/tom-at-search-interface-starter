@@ -347,6 +347,18 @@ async function loadMore() {
   );
 }
 
+function hasUsableSearchSeed(profile: NeedProfile) {
+  const hasActivity =
+    profile.activity &&
+    profile.activity !== "unknown activity";
+
+  const hasProblem =
+    profile.problem &&
+    profile.problem !== "unknown problem";
+
+  return Boolean(hasActivity && hasProblem);
+}
+
 function IntakeScreen({
   messages,
   draft,
@@ -370,10 +382,16 @@ function IntakeScreen({
   missingInformation: string[];
   onStartSearch: () => void;
 }) {
+
+
+
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     onSubmit();
   }
+
+    const userTurnCount = messages.filter((message) => message.role === "user").length;
+  const showSearchAction = readyForSearch && userTurnCount >= 2;
 
   if (!messages.length) {
     return (
@@ -385,14 +403,14 @@ function IntakeScreen({
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="Describe the daily challenge. For example: what are you trying to do, and what makes it difficult, unsafe, or uncomfortable?"
+             placeholder="Tell us what you’re trying to do, and what’s getting in the way. A sentence or two is enough to start."
               autoFocus
             />
 
             <div className="heroActions">
 
               <button type="submit" className="sendBtn">
-                Start intake
+                Start 
               </button>
             </div>
           </form>
@@ -432,99 +450,38 @@ function IntakeScreen({
             ))}
           </div>
         )}
-
         <form className="chatInputBar" onSubmit={handleSubmit}>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="Answer here..."
+            placeholder={
+              showSearchAction
+                ? "Add any extra detail, or start searching related projects."
+                : "Answer here..."
+            }
           />
-          <button className="sendBtn" type="submit">
-            Send
-          </button>
+
+          <div className="inputActions">
+            <button className="sendBtn" type="submit">
+              Send
+            </button>
+
+            {showSearchAction && (
+              <button
+                className="searchActionBtn"
+                type="button"
+                onClick={onStartSearch}
+              >
+                Search related projects
+              </button>
+            )}
+          </div>
         </form>
       </div>
 
-{readyForSearch && (
-  <div className="handoffSummary">
-    <div>
-      <p className="summaryLabel">Ready to search</p>
 
-      <p className="summaryText">
-        {handoffReason ||
-          `I understand the need as: ${needProfile.activity} — ${needProfile.problem}`}
-      </p>
 
-<div className="summaryGrid">
-  <div>
-    <b>Activity</b>
-    <span>{needProfile.activity || "not specified"}</span>
-  </div>
 
-  <div>
-    <b>Problem</b>
-    <span>{needProfile.problem || "not specified"}</span>
-  </div>
-
-  <div>
-    <b>Desired outcome</b>
-    <span>{needProfile.desiredOutcome || "not specified"}</span>
-  </div>
-
-  <div>
-    <b>Age / role</b>
-    <span>
-      {[needProfile.userAge, needProfile.seekerRole]
-        .filter(Boolean)
-        .join(" / ") || "not specified"}
-    </span>
-  </div>
-
-  <div>
-    <b>Location</b>
-    <span>
-      {[needProfile.location.cityOrRegion, needProfile.location.country]
-        .filter(Boolean)
-        .join(", ") || "not specified"}
-    </span>
-  </div>
-
-  <div>
-    <b>User context</b>
-    <span>
-      {[
-        ...needProfile.userContext,
-        ...needProfile.bodyFunction,
-        ...needProfile.currentDevices,
-      ].join(", ") || "not specified"}
-    </span>
-  </div>
-
-  <div>
-    <b>Environment</b>
-    <span>{needProfile.environment.join(", ") || "not specified"}</span>
-  </div>
-
-  <div>
-    <b>Search directions</b>
-    <span>
-      {needProfile.searchDirections.slice(0, 4).join(", ") || "to be generated"}
-    </span>
-  </div>
-</div>
-
-      {missingInformation.length > 0 && (
-        <p className="missingText">
-          Useful to confirm later: {missingInformation.slice(0, 4).join(", ")}
-        </p>
-      )}
-    </div>
-
-    <button className="sendBtn" onClick={onStartSearch}>
-      Search related projects
-    </button>
-  </div>
-)}
     </section>
   );
 }
