@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 // Phase 1: FETCH ONLY (fast, no LLM). Pull a few results from each source and
 // return the whole unscored pool. The frontend scores it in pages via
 // /api/evaluate and reveals more with "Load more".
-const TOM_LIMIT = 30;
+const TOM_LIMIT = 20;
 const PRIMARY_PER_DOMAIN = 0;
 const SECONDARY_PER_DOMAIN = 3;
 const COMMERCIAL_PER_DOMAIN = 2;
@@ -62,6 +62,12 @@ export async function POST(req: NextRequest) {
     const externalCandidates = buildCandidatesFromExa(externalResults);
 
     const pool = [...tomCandidates, ...externalCandidates];
+
+    console.log("Search pool source counts", {
+  tom: tomCandidates.length,
+  external: externalCandidates.length,
+  total: pool.length
+});
 
     return NextResponse.json({ query, pool } satisfies SearchPoolResponse);
   } catch (error) {

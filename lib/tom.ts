@@ -31,6 +31,8 @@ type TomProject = {
   };
 };
 
+const MIN_TOM_RESULTS = 3;
+
 export async function searchTomProjects({
   needProfile,
   limit = 15
@@ -45,23 +47,72 @@ export async function searchTomProjects({
     return [];
   }
 
-  const query = buildTomUserInput(needProfile);
+  const queries = buildTomSearchQueries(needProfile);
 
-  if (!query) {
+  if (!queries.length) {
     console.warn("No usable TOM search query. TOM projects will be skipped.");
     return [];
   }
 
-  const candidates = await fetchTomProjectCandidates({
-    endpoint,
-    userInput: query,
-    limit
-  });
+  let collected: CandidateProject[] = [];
 
-  return filterTomCandidatesByNeed(candidates, needProfile);
+  for (const userInput of queries) {
+    const candidates = await fetchTomProjectCandidates({
+      endpoint,
+      userInput,
+      limit
+    });
+
+    collected = mergeTomCandidates(collected, candidates);
+
+    if (collected.length >= MIN_TOM_RESULTS) {
+      break;
+    }
+  }
+
+  return rankTomCandidatesByNeed(collected, needProfile).slice(0, limit);
 }
 
-function filterTomCandidatesByNeed(
+function buildTomSearchQueries(needProfile: NeedProfile) {
+  const specificQuery = buildCleanQuery([
+    needProfile.activity,
+    needProfile.desiredOutcome,
+    ...needProfile.currentDevices,
+    ...needProfile.mustHave
+  ]);
+
+  const deviceQuery = buildCleanQuery([
+    ...needProfile.currentDevices,
+    ...needProfile.bodyFunction,
+    ...needProfile.mustHave
+  ]);
+
+  const problemQuery = buildCleanQuery([
+    needProfile.activity,
+    needProfile.problem,
+    ...needProfile.currentDevices
+  ]);
+
+  return Array.from(
+    new Set([specificQuery, deviceQuery, problemQuery].filter(Boolean))
+  );
+}
+
+function buildCleanQuery(parts: string[]) {
+  return parts
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter(
+      (part) =>
+        part !== "unknown activity" &&
+        part !== "unknown problem" &&
+        part !== "unknown desired outcome"
+    )
+    .join(" ")
+    .slice(0, 160);
+}
+
+function rankTomCandidatesByNeed(
   candidates: CandidateProject[],
   needProfile: NeedProfile
 ) {
@@ -69,25 +120,26 @@ function filterTomCandidatesByNeed(
 
   if (!keywords.length) return candidates;
 
-  return candidates.filter((candidate) => {
-    const text = [
-      candidate.title,
-      candidate.summary,
-      candidate.rawText
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    const matchedKeywords = keywords.filter((keyword) =>
-      text.includes(keyword)
-    );
-
-    // 如果关键词很多，至少 match 2 个；如果关键词少，至少 match 1 个。
-    const minimumMatches = keywords.length >= 4 ? 2 : 1;
-
-    return matchedKeywords.length >= minimumMatches;
+  return [...candidates].sort((a, b) => {
+    return scoreTomCandidate(b, keywords) - scoreTomCandidate(a, keywords);
   });
 }
+
+function scoreTomCandidate(candidate: CandidateProject, keywords: string[]) {
+  const text = [
+    candidate.title,
+    candidate.summary,
+    candidate.rawText
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return keywords.reduce((score, keyword) => {
+    return text.includes(keyword) ? score + 1 : score;
+  }, 0);
+}
+
+
 
 function buildTomKeywords(needProfile: NeedProfile) {
   const rawText = [
