@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildSearchQuery, fetchPoolPerDomain } from "@/lib/exa";
+import { buildSearchQuery, fetchPrioritizedPool } from "@/lib/exa";
 import { buildCandidatesFromExa } from "@/lib/evaluate";
 import { CandidateProject, NeedProfile } from "@/lib/types";
 
@@ -8,7 +8,9 @@ export const runtime = "nodejs";
 // Phase 1: FETCH ONLY (fast, no LLM). Pull a few results from each source and
 // return the whole unscored pool. The frontend scores it in pages via
 // /api/evaluate and reveals more with "Load more".
-const PER_DOMAIN = 4;
+const PRIMARY_PER_DOMAIN = 8;
+const SECONDARY_PER_DOMAIN = 3;
+const COMMERCIAL_PER_DOMAIN = 2;
 
 export type SearchPoolResponse = {
   query: string;
@@ -35,11 +37,13 @@ export async function POST(req: NextRequest) {
 
     const query = buildSearchQuery(needProfile, customQuery);
 
-    const results = await fetchPoolPerDomain({
-      query,
-      needProfile,
-      perDomain: PER_DOMAIN
-    });
+const results = await fetchPrioritizedPool({
+  query,
+  needProfile,
+  primaryPerDomain: PRIMARY_PER_DOMAIN,
+  secondaryPerDomain: SECONDARY_PER_DOMAIN,
+  commercialPerDomain: COMMERCIAL_PER_DOMAIN
+});
 
     // Build candidates WITHOUT scoring them (evaluation stays empty for now).
     const pool = buildCandidatesFromExa(results);

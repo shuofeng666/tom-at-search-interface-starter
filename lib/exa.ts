@@ -96,6 +96,83 @@ export async function fetchPoolPerDomain({
   return interleave(perDomainResults);
 }
 
+export async function fetchPrioritizedPool({
+  query,
+  needProfile,
+  primaryPerDomain = 8,
+  secondaryPerDomain = 3,
+  commercialPerDomain = 2
+}: {
+  query: string;
+  needProfile: NeedProfile;
+  primaryPerDomain?: number;
+  secondaryPerDomain?: number;
+  commercialPerDomain?: number;
+}): Promise<ExaSearchResult[]> {
+  const primaryDomains = parseDomainList(process.env.EXA_PRIMARY_DOMAINS);
+  const secondaryDomains = parseDomainList(process.env.EXA_SECONDARY_DOMAINS);
+  const commercialDomains = parseDomainList(process.env.EXA_COMMERCIAL_DOMAINS);
+
+  const fetchDomainGroup = async (domains: string[], perDomain: number) => {
+    if (!domains.length || perDomain <= 0) return [];
+
+    const groups = await Promise.all(
+      domains.map((domain) =>
+        searchExaProjects({
+          query,
+          needProfile,
+          numResults: perDomain,
+          includeDomainsOverride: [domain]
+        })
+      )
+    );
+
+    return interleave(groups);
+  };
+
+  const [primaryResults, secondaryResults, commercialResults] =
+    await Promise.all([
+      fetchDomainGroup(primaryDomains, primaryPerDomain),
+      fetchDomainGroup(secondaryDomains, secondaryPerDomain),
+      fetchDomainGroup(commercialDomains, commercialPerDomain)
+    ]);
+
+  const merged = [
+    ...primaryResults,
+    ...secondaryResults,
+    ...commercialResults
+  ];
+
+  return dedupeByUrl(merged);
+}
+
+function dedupeByUrl(results: ExaSearchResult[]) {
+  const seen = new Set<string>();
+  const deduped: ExaSearchResult[] = [];
+
+  for (const result of results) {
+    const key = normalizeUrlKey(result.url || result.id || result.title || "");
+
+    if (!key || seen.has(key)) continue;
+
+    seen.add(key);
+    deduped.push(result);
+  }
+
+  return deduped;
+}
+
+function normalizeUrlKey(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.search = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return value.trim().toLowerCase();
+  }
+}
+
 // Round-robin merge: [a1,a2], [b1,b2,b3], [c1] -> a1,b1,c1,a2,b2,b3
 function interleave<T>(groups: T[][]): T[] {
   const merged: T[] = [];
@@ -163,7 +240,7 @@ export function buildSearchQuery(needProfile: NeedProfile, customQuery?: string)
 export function detectSourceType(url: string): CandidateSourceType {
   const lower = url.toLowerCase();
 
-  if (lower.includes("tomchallenge.org")) return "TOM project";
+  if (lower.includes("https://tomglobal.org")) return "TOM project";
   if (lower.includes("instructables.com")) return "DIY project";
   if (
     lower.includes("thingiverse.com") ||

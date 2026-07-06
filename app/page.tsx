@@ -6,7 +6,7 @@ import {
   ChatMessage,
   IntakeChatResponse,
   NeedProfile,
-  ReviewSummary
+  ReviewSummary,
 } from "@/lib/types";
 import { emptyNeedProfile } from "@/lib/types";
 
@@ -21,6 +21,12 @@ type SearchPoolResponse = {
 
 const PAGE_SIZE = 8;
 
+const MIN_VISIBLE_SCORE = 2;
+
+function isVisibleCandidate(candidate: CandidateProject) {
+  return (candidate.evaluation?.overallScore ?? 0) >= MIN_VISIBLE_SCORE;
+}
+
 const rejectionOptions = [
   { value: "requires-hand-use", label: "requires too much hand use" },
   { value: "not-removable", label: "not removable" },
@@ -30,21 +36,18 @@ const rejectionOptions = [
   { value: "too-expensive", label: "too expensive" },
   { value: "not-portable", label: "not portable" },
   { value: "not-available", label: "not available locally" },
-  { value: "poor-documentation", label: "documentation is incomplete" }
+  { value: "poor-documentation", label: "documentation is incomplete" },
 ];
 
-function scoreTone(score: number): "good" | "warn" | "bad" {
-  if (score >= 2.4) return "good";
-  if (score >= 1.5) return "warn";
-  return "bad";
-}
+
 
 export default function Home() {
   const [stage, setStage] = useState<Stage>("intake");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-const [needProfile, setNeedProfile] = useState<NeedProfile>(emptyNeedProfile());
-const [error, setError] = useState<string | null>(null);
+  const [needProfile, setNeedProfile] =
+    useState<NeedProfile>(emptyNeedProfile());
+  const [error, setError] = useState<string | null>(null);
   const [readyForSearch, setReadyForSearch] = useState(false);
   const [handoffReason, setHandoffReason] = useState("");
   const [missingInformation, setMissingInformation] = useState<string[]>([]);
@@ -56,178 +59,195 @@ const [error, setError] = useState<string | null>(null);
   const [review, setReview] = useState<ReviewSummary | null>(null);
   const [query, setQuery] = useState<string>("");
   const [loading, setLoading] = useState<string | null>(null);
-  const [selectedForComparison, setSelectedForComparison] = useState<string[]>([]);
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [selectedForComparison, setSelectedForComparison] = useState<string[]>(
+    [],
+  );
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    null,
+  );
 
   const savedCandidates = useMemo(
-    () => candidates.filter((candidate) => selectedForComparison.includes(candidate.id)),
-    [candidates, selectedForComparison]
+    () =>
+      candidates.filter((candidate) =>
+        selectedForComparison.includes(candidate.id),
+      ),
+    [candidates, selectedForComparison],
   );
 
   const selectedCandidate = useMemo(
-    () => candidates.find((candidate) => candidate.id === selectedCandidateId) || candidates[0] || null,
-    [candidates, selectedCandidateId]
+    () =>
+      candidates.find((candidate) => candidate.id === selectedCandidateId) ||
+      candidates[0] ||
+      null,
+    [candidates, selectedCandidateId],
   );
 
-async function sendIntakeMessage(content?: string) {
-  const text = (content ?? draft).trim();
-  if (!text) return;
+  async function sendIntakeMessage(content?: string) {
+    const text = (content ?? draft).trim();
+    if (!text) return;
 
-  const userMessage: ChatMessage = {
-    id: `user-${Date.now()}`,
-    role: "user",
-    content: text
-  };
-
-  const nextMessages = [...messages, userMessage];
-  setMessages(nextMessages);
-  setDraft("");
-  setLoading("asking follow-up");
-  setError(null);
-
-  try {
-    const res = await fetch("/api/intake-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: nextMessages,
-        currentNeedProfile: needProfile
-      })
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error || "Intake agent failed.");
-    }
-
-    const intakeData = data as IntakeChatResponse;
-
-    const assistantMessage: ChatMessage = {
-      id: `assistant-${Date.now()}`,
-      role: "assistant",
-      content: intakeData.assistantMessage
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: text,
     };
 
-    setMessages([...nextMessages, assistantMessage]);
-    setNeedProfile(intakeData.needProfile);
-    setReadyForSearch(intakeData.readyForInternalSearch);
-    setHandoffReason(intakeData.handoffReason);
-    setMissingInformation(intakeData.missingInformation || []);
-    setSuggestedReplies(intakeData.suggestedReplies || []);
-  } catch (err) {
-    const message =
-      err instanceof Error
-        ? err.message
-        : "The intake agent failed.";
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
+    setDraft("");
+    setLoading("asking follow-up");
+    setError(null);
 
-    setError(message);
-    setMessages([
-      ...nextMessages,
-      {
-        id: `assistant-error-${Date.now()}`,
-        role: "assistant",
-        content:
-          "The intake agent could not connect right now. Please check the Gemini API connection and try again."
+    try {
+      const res = await fetch("/api/intake-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: nextMessages,
+          currentNeedProfile: needProfile,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Intake agent failed.");
       }
-    ]);
-  } finally {
-    setLoading(null);
+
+      const intakeData = data as IntakeChatResponse;
+
+      const assistantMessage: ChatMessage = {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        content: intakeData.assistantMessage,
+      };
+
+      setMessages([...nextMessages, assistantMessage]);
+      setNeedProfile(intakeData.needProfile);
+      setReadyForSearch(intakeData.readyForInternalSearch);
+      setHandoffReason(intakeData.handoffReason);
+      setMissingInformation(intakeData.missingInformation || []);
+      setSuggestedReplies(intakeData.suggestedReplies || []);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "The intake agent failed.";
+
+      setError(message);
+      setMessages([
+        ...nextMessages,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: "assistant",
+          content:
+            "The intake agent could not connect right now. Please check the Gemini API connection and try again.",
+        },
+      ]);
+    } finally {
+      setLoading(null);
+    }
   }
-}
-// Score a batch of already-fetched candidates via the on-demand evaluate route.
-async function scoreBatch(batch: CandidateProject[]): Promise<CandidateProject[]> {
-  const res = await fetch("/api/evaluate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ needProfile, candidates: batch })
-  });
-
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Evaluation failed.");
-
-  return (data.candidates || []) as CandidateProject[];
-}
-
-async function startSearch(customQuery?: string) {
-  setLoading("searching projects");
-  setError(null);
-  setStage("review");
-  setReview(null);
-  setSelectedForComparison([]);
-  setCandidates([]);
-  setPool([]);
-  setPoolCursor(0);
-
-  try {
-    const res = await fetch("/api/search", {
+  // Score a batch of already-fetched candidates via the on-demand evaluate route.
+  async function scoreBatch(
+    batch: CandidateProject[],
+  ): Promise<CandidateProject[]> {
+    const res = await fetch("/api/evaluate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        needProfile,
-        query: customQuery
-      })
+      body: JSON.stringify({ needProfile, candidates: batch }),
     });
 
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Evaluation failed.");
 
-    if (!res.ok) {
-      throw new Error(data.error || "Search failed.");
-    }
+    return (data.candidates || []) as CandidateProject[];
+  }
 
-    const searchData = data as SearchPoolResponse;
-    setQuery(searchData.query);
-
-    const fetchedPool = searchData.pool || [];
-    setPool(fetchedPool);
-
-    if (!fetchedPool.length) {
-      setCandidates([]);
-      setSelectedCandidateId(null);
-      setError("No real search results were returned. Try broadening the query or removing domain filters.");
-      return;
-    }
-
-    // Score only the first page; the rest waits behind "Load more".
-    const firstBatch = fetchedPool.slice(0, PAGE_SIZE);
-    const scored = await scoreBatch(firstBatch);
-
-    setCandidates(scored);
-    setPoolCursor(firstBatch.length);
-    setSelectedCandidateId(scored[0]?.id || null);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Search failed.";
-    setError(message);
+  async function startSearch(customQuery?: string) {
+    setLoading("searching projects");
+    setError(null);
+    setStage("review");
+    setReview(null);
+    setSelectedForComparison([]);
     setCandidates([]);
     setPool([]);
     setPoolCursor(0);
-    setSelectedCandidateId(null);
-  } finally {
-    setLoading(null);
+
+    try {
+      const res = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          needProfile,
+          query: customQuery,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Search failed.");
+      }
+
+      const searchData = data as SearchPoolResponse;
+      setQuery(searchData.query);
+
+      const fetchedPool = searchData.pool || [];
+      setPool(fetchedPool);
+
+      if (!fetchedPool.length) {
+        setCandidates([]);
+        setSelectedCandidateId(null);
+        setError(
+          "No real search results were returned. Try broadening the query or removing domain filters.",
+        );
+        return;
+      }
+
+      // Score only the first page; the rest waits behind "Load more".
+      const firstBatch = fetchedPool.slice(0, PAGE_SIZE);
+const scored = await scoreBatch(firstBatch);
+const visibleScored = scored.filter(isVisibleCandidate);
+
+setCandidates(visibleScored);
+setPoolCursor(firstBatch.length);
+setSelectedCandidateId(visibleScored[0]?.id || null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Search failed.";
+      setError(message);
+      setCandidates([]);
+      setPool([]);
+      setPoolCursor(0);
+      setSelectedCandidateId(null);
+    } finally {
+      setLoading(null);
+    }
   }
-}
 
-async function loadMore() {
-  if (poolCursor >= pool.length) return;
+  async function loadMore() {
+    if (poolCursor >= pool.length) return;
 
-  setLoadingMore(true);
-  setError(null);
+    setLoadingMore(true);
+    setError(null);
 
-  try {
-    const nextBatch = pool.slice(poolCursor, poolCursor + PAGE_SIZE);
-    const scored = await scoreBatch(nextBatch);
+    try {
+      const nextBatch = pool.slice(poolCursor, poolCursor + PAGE_SIZE);
+const scored = await scoreBatch(nextBatch);
+const visibleScored = scored.filter(isVisibleCandidate);
 
-    setCandidates((previous) => [...previous, ...scored]);
-    setPoolCursor((previous) => previous + nextBatch.length);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Load more failed.";
-    setError(message);
-  } finally {
-    setLoadingMore(false);
+setCandidates((previous) => [...previous, ...visibleScored]);
+setPoolCursor((previous) => previous + nextBatch.length);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Load more failed.";
+      setError(message);
+    } finally {
+      setLoadingMore(false);
+    }
   }
-}
 
-  async function rejectCandidate(candidate: CandidateProject, rejectionReason: string) {
+  async function rejectCandidate(
+    candidate: CandidateProject,
+    rejectionReason: string,
+  ) {
     setLoading("updating criteria");
     setReview(null);
 
@@ -238,8 +258,8 @@ async function loadMore() {
         body: JSON.stringify({
           needProfile,
           candidate,
-          rejectionReason
-        })
+          rejectionReason,
+        }),
       });
 
       const updated = (await res.json()) as NeedProfile;
@@ -252,11 +272,12 @@ async function loadMore() {
                 ...item,
                 rejected: true,
                 rejectionReason:
-                  rejectionOptions.find((option) => option.value === rejectionReason)?.label ||
-                  rejectionReason
+                  rejectionOptions.find(
+                    (option) => option.value === rejectionReason,
+                  )?.label || rejectionReason,
               }
-            : item
-        )
+            : item,
+        ),
       );
     } finally {
       setLoading(null);
@@ -272,8 +293,8 @@ async function loadMore() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           needProfile,
-          candidates
-        })
+          candidates,
+        }),
       });
 
       const data = (await res.json()) as ReviewSummary;
@@ -288,7 +309,7 @@ async function loadMore() {
     setSelectedForComparison((previous) =>
       previous.includes(id)
         ? previous.filter((candidateId) => candidateId !== id)
-        : [...previous, id]
+        : [...previous, id],
     );
   }
 
@@ -300,18 +321,18 @@ async function loadMore() {
       {error && <div className="errorBanner">{error}</div>}
 
       {stage === "intake" && (
-<IntakeScreen
-  messages={messages}
-  draft={draft}
-  setDraft={setDraft}
-  onSubmit={sendIntakeMessage}
-  readyForSearch={readyForSearch}
-  handoffReason={handoffReason}
-  suggestedReplies={suggestedReplies}
-  needProfile={needProfile}
-  missingInformation={missingInformation}
-  onStartSearch={() => startSearch()}
-/>
+        <IntakeScreen
+          messages={messages}
+          draft={draft}
+          setDraft={setDraft}
+          onSubmit={sendIntakeMessage}
+          readyForSearch={readyForSearch}
+          handoffReason={handoffReason}
+          suggestedReplies={suggestedReplies}
+          needProfile={needProfile}
+          missingInformation={missingInformation}
+          onStartSearch={() => startSearch()}
+        />
       )}
 
       {stage === "review" && (
@@ -349,12 +370,9 @@ async function loadMore() {
 
 function hasUsableSearchSeed(profile: NeedProfile) {
   const hasActivity =
-    profile.activity &&
-    profile.activity !== "unknown activity";
+    profile.activity && profile.activity !== "unknown activity";
 
-  const hasProblem =
-    profile.problem &&
-    profile.problem !== "unknown problem";
+  const hasProblem = profile.problem && profile.problem !== "unknown problem";
 
   return Boolean(hasActivity && hasProblem);
 }
@@ -369,7 +387,7 @@ function IntakeScreen({
   suggestedReplies,
   needProfile,
   missingInformation,
-  onStartSearch
+  onStartSearch,
 }: {
   messages: ChatMessage[];
   draft: string;
@@ -382,15 +400,14 @@ function IntakeScreen({
   missingInformation: string[];
   onStartSearch: () => void;
 }) {
-
-
-
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     onSubmit();
   }
 
-    const userTurnCount = messages.filter((message) => message.role === "user").length;
+  const userTurnCount = messages.filter(
+    (message) => message.role === "user",
+  ).length;
   const showSearchAction = readyForSearch && userTurnCount >= 2;
 
   if (!messages.length) {
@@ -403,14 +420,13 @@ function IntakeScreen({
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-             placeholder="Tell us what you’re trying to do, and what’s getting in the way. A sentence or two is enough to start."
+              placeholder="Tell us what you’re trying to do, and what’s getting in the way. A sentence or two is enough to start."
               autoFocus
             />
 
             <div className="heroActions">
-
               <button type="submit" className="sendBtn">
-                Start 
+                Start
               </button>
             </div>
           </form>
@@ -478,10 +494,6 @@ function IntakeScreen({
           </div>
         </form>
       </div>
-
-
-
-
     </section>
   );
 }
@@ -501,7 +513,7 @@ function ReviewScreen({
   canLoadMore,
   loadingMore,
   generateReviewSummary,
-  onBackToIntake
+  onBackToIntake,
 }: {
   needProfile: NeedProfile;
   candidates: CandidateProject[];
@@ -511,7 +523,10 @@ function ReviewScreen({
   query: string;
   setSelectedCandidateId: (id: string) => void;
   toggleComparison: (id: string) => void;
-  rejectCandidate: (candidate: CandidateProject, rejectionReason: string) => void;
+  rejectCandidate: (
+    candidate: CandidateProject,
+    rejectionReason: string,
+  ) => void;
   runSearch: (query?: string) => void;
   loadMore: () => void;
   canLoadMore: boolean;
@@ -521,20 +536,33 @@ function ReviewScreen({
 }) {
   return (
     <section className="workspace">
-      <header className="workspaceHeader">
-        <button className="plainBtn" onClick={onBackToIntake}>
-          ← Intake
-        </button>
+     <header className="workspaceHeader">
+  <button className="plainBtn" onClick={onBackToIntake}>
+    ← Intake
+  </button>
 
-        <div>
-          <h1>Search review</h1>
-          <p>Review candidate projects before any user-facing recommendation is prepared.</p>
-        </div>
+  <div>
+    <h1>Search review</h1>
+    <p>Check whether these projects match the need before preparing a summary.</p>
+  </div>
 
-        <button className="sendBtn" onClick={generateReviewSummary}>
-          Prepare summary
-        </button>
-      </header>
+  <div className="headerNeedCheck">
+    <div>
+      <p className="headerNeedCheckTitle">Does this match the need?</p>
+      <p className="headerNeedCheckText">
+        If the results feel off, add one more detail before summarizing.
+      </p>
+    </div>
+
+    <div className="headerNeedCheckActions">
+      <button className="sendBtn" onClick={onBackToIntake}>
+        Add more details
+      </button>
+
+
+    </div>
+  </div>
+</header>
 
       <div className="workspaceGrid">
         <aside className="panel leftPanel">
@@ -563,7 +591,9 @@ function ReviewScreen({
 
         <section className="panel resultsPanel">
           <h2>Related projects</h2>
-          <p className="small resultsHint">In source order. Tap a card for details.</p>
+          <p className="small resultsHint">
+            In source order. Tap a card for details.
+          </p>
 
           <div className="candidateList">
             {candidates.map((candidate) => (
@@ -590,6 +620,7 @@ function ReviewScreen({
         </section>
 
         <aside className="panel detailPanel">
+       
           {selectedCandidate ? (
             <CandidateDetail
               candidate={selectedCandidate}
@@ -613,12 +644,67 @@ function ReviewScreen({
   );
 }
 
+function SearchReflectionPanel({
+  needProfile,
+  candidates,
+  savedCandidates,
+  onBackToIntake,
+  onPrepareSummary,
+}: {
+  needProfile: NeedProfile;
+  candidates: CandidateProject[];
+  savedCandidates: CandidateProject[];
+  onBackToIntake: () => void;
+  onPrepareSummary: () => void;
+}) {
+  const missingHints = Array.from(
+    new Set(
+      candidates
+        .flatMap((candidate) => candidate.evaluation?.missingInformation || [])
+        .filter(Boolean),
+    ),
+  ).slice(0, 3);
+
+  const unmatchedHints = Array.from(
+    new Set(
+      candidates
+        .flatMap((candidate) => candidate.evaluation?.unmatchedCriteria || [])
+        .filter(Boolean),
+    ),
+  ).slice(0, 3);
+
+  const hasSavedCandidates = savedCandidates.length > 0;
+
+  return (
+    <section className="reflectionPanel">
+      <p className="reflectionLabel">Does this match the need?</p>
+
+      <p className="reflectionText">
+        If these projects feel off, add one more detail before preparing the
+        summary.
+      </p>
+
+      {(missingHints.length > 0 || unmatchedHints.length > 0) && (
+        <div className="reflectionHints">
+
+        </div>
+      )}
+
+      <div className="reflectionActions">
+
+
+
+      </div>
+    </section>
+  );
+}
+
 function OutputScreen({
   review,
   needProfile,
   candidates,
   savedCandidates,
-  onBackToReview
+  onBackToReview,
 }: {
   review: ReviewSummary;
   needProfile: NeedProfile;
@@ -626,7 +712,9 @@ function OutputScreen({
   savedCandidates: CandidateProject[];
   onBackToReview: () => void;
 }) {
-  const displayCandidates = savedCandidates.length ? savedCandidates : candidates.slice(0, 3);
+  const displayCandidates = savedCandidates.length
+    ? savedCandidates
+    : candidates.slice(0, 3);
 
   return (
     <section className="workspace outputWorkspace">
@@ -721,9 +809,7 @@ function NeedProfileView({
       <ChipRow label="Must have" items={profile.mustHave} tone="good" />
       <ChipRow label="Must avoid" items={profile.mustAvoid} tone="bad" />
 
-      {!compact && (
-        <ChipRow label="Preferences" items={profile.preferences} />
-      )}
+      {!compact && <ChipRow label="Preferences" items={profile.preferences} />}
 
       {!compact && (
         <ChipRow label="Safety" items={profile.safetyConcerns} tone="warn" />
@@ -737,7 +823,7 @@ function NeedProfileView({
 function ChipRow({
   label,
   items,
-  tone
+  tone,
 }: {
   label: string;
   items: string[];
@@ -759,6 +845,22 @@ function ChipRow({
   );
 }
 
+function formatSourceLabel(source: string) {
+  const normalized = source.toLowerCase().replace(/^www\./, "");
+
+  if (normalized.includes("tomglobal.org")) return "TOM Global";
+  if (normalized.includes("tomchallenge.org")) return "TOM Challenge";
+  if (normalized.includes("instructables.com")) return "Instructables";
+  if (normalized.includes("thingiverse.com")) return "Thingiverse";
+  if (normalized.includes("printables.com")) return "Printables";
+  if (normalized.includes("github.com")) return "GitHub";
+  if (normalized.includes("amazon.")) return "Amazon";
+  if (normalized.includes("walmart.")) return "Walmart";
+  if (normalized.includes("etsy.")) return "Etsy";
+
+  return source || "Unknown source";
+}
+
 function CandidateRow({
   candidate,
   active,
@@ -772,9 +874,6 @@ function CandidateRow({
   onSelect: () => void;
   onToggleComparison: () => void;
 }) {
-  const evaluation = candidate.evaluation;
-  const tone = scoreTone(evaluation.overallScore);
-
   return (
     <article
       className={active ? "projectCard active" : "projectCard"}
@@ -794,12 +893,15 @@ function CandidateRow({
         ) : (
           <div className="cardMediaFallback">{candidate.sourceType}</div>
         )}
-        <span className={`scoreBadge ${tone}`}>{evaluation.overallScore.toFixed(1)}</span>
+
         {candidate.rejected && <span className="cardRejected">rejected</span>}
       </div>
 
       <div className="cardBody">
-        <span className="cardType">{candidate.sourceType}</span>
+        <div className="sourceMeta">
+  <span className="cardType">{candidate.sourceType}</span>
+  <span className="sourceBadge">{formatSourceLabel(candidate.source)}</span>
+</div>
         <h3 className="cardTitle">{candidate.title}</h3>
         <p className="cardTeaser">{candidate.summary}</p>
 
@@ -842,13 +944,14 @@ function CandidateDetail({
 }) {
   const [reason, setReason] = useState(rejectionOptions[0].value);
   const evaluation = candidate.evaluation;
-  const tone = scoreTone(evaluation.overallScore);
 
   return (
     <article className="candidateDetail">
       <div className="detailHead">
-        <span className="cardType">{candidate.sourceType}</span>
-        <span className={`scoreBadge ${tone}`}>{evaluation.overallScore.toFixed(1)} / 3</span>
+        <div className="sourceMeta">
+  <span className="cardType">{candidate.sourceType}</span>
+  <span className="sourceBadge">{formatSourceLabel(candidate.source)}</span>
+</div>
       </div>
 
       <h2>{candidate.title}</h2>
@@ -870,55 +973,21 @@ function CandidateDetail({
         />
       )}
 
-      <span className="chip warn detailPathway">{evaluation.pathway}</span>
-
-      <div className="scoreGrid">
-        <ScoreBox label="Innovation" value={evaluation.innovation.score} />
-        <ScoreBox label="Quality" value={evaluation.qualityOfSolution.score} />
-        <ScoreBox label="Accessibility" value={evaluation.accessibility.score} />
-        <ScoreBox label="Affordability" value={evaluation.affordability.score} />
-        <ScoreBox label="Documentation" value={evaluation.documentation.score} />
-        <ScoreBox label="Impact" value={evaluation.impact.score} />
-      </div>
-
       <div className="evalBlock">
-        <h4>Pathway</h4>
-        <p>{evaluation.pathwayReason}</p>
-      </div>
-
-      <div className="evalBlock">
-        <h4>Innovation</h4>
-        <p>{evaluation.innovation.explanation}</p>
-      </div>
-
-      <div className="evalBlock">
-        <h4>Quality of solution</h4>
-        <p>{evaluation.qualityOfSolution.explanation}</p>
-      </div>
-
-      <div className="evalBlock">
-        <h4>Accessibility</h4>
-        <p>{evaluation.accessibility.explanation}</p>
-      </div>
-
-      <div className="evalBlock">
-        <h4>Affordability</h4>
-        <p>{evaluation.affordability.explanation}</p>
-      </div>
-
-      <div className="evalBlock">
-        <h4>Documentation</h4>
-        <p>{evaluation.documentation.explanation}</p>
-      </div>
-
-      <div className="evalBlock">
-        <h4>Impact</h4>
+        <h4>Why it may help</h4>
         <p>{evaluation.impact.explanation}</p>
       </div>
 
-      <ChipRow label="Matched" items={evaluation.matchedCriteria} tone="good" />
-      <ChipRow label="Unmatched" items={evaluation.unmatchedCriteria} tone="bad" />
-      <ChipRow label="Missing" items={evaluation.missingInformation} tone="warn" />
+      <div className="evalBlock">
+        <h4>What to check</h4>
+        <p>
+          {evaluation.missingInformation.slice(0, 3).join(", ") ||
+            "No major missing information detected yet."}
+        </p>
+      </div>
+
+      <ChipRow label="Matched needs" items={evaluation.matchedCriteria} tone="good" />
+      <ChipRow label="Possible mismatches" items={evaluation.unmatchedCriteria} tone="bad" />
 
       <details className="rawSummary">
         <summary>Full source summary</summary>
@@ -957,14 +1026,7 @@ function CandidateDetail({
   );
 }
 
-function ScoreBox({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="scoreBox">
-      <span>{label}</span>
-      <b>{value}</b>
-    </div>
-  );
-}
+
 
 function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
   return (
@@ -973,10 +1035,9 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
         <thead>
           <tr>
             <th>Project</th>
-            <th>Impact</th>
-            <th>Quality</th>
-            <th>Docs</th>
-            <th>Pathway</th>
+            <th>Type</th>
+            <th>Why it may help</th>
+            <th>What to check</th>
           </tr>
         </thead>
 
@@ -984,10 +1045,12 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
           {candidates.map((candidate) => (
             <tr key={candidate.id}>
               <td>{candidate.title}</td>
-              <td>{candidate.evaluation.impact.score}</td>
-              <td>{candidate.evaluation.qualityOfSolution.score}</td>
-              <td>{candidate.evaluation.documentation.score}</td>
-              <td>{candidate.evaluation.pathway}</td>
+              <td>{candidate.sourceType}</td>
+              <td>{candidate.evaluation.impact.explanation}</td>
+              <td>
+                {candidate.evaluation.missingInformation.slice(0, 2).join(", ") ||
+                  "No major unknowns"}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -998,7 +1061,7 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
 
 function ReviewSummaryView({
   review,
-  internal
+  internal,
 }: {
   review: ReviewSummary;
   internal?: boolean;
@@ -1017,7 +1080,12 @@ function ReviewSummaryView({
         <b>Recommended pathway:</b> {review.recommendedPathway}
       </p>
 
-      {internal && <SummaryList title="Next actions for TOM" items={review.nextActionsForTomTeam} />}
+      {internal && (
+        <SummaryList
+          title="Next actions for TOM"
+          items={review.nextActionsForTomTeam}
+        />
+      )}
     </div>
   );
 }
@@ -1053,7 +1121,12 @@ function UserFacingCard({ candidate }: { candidate: CandidateProject }) {
           "No major missing information detected."}
       </p>
 
-      <a className="openLink" href={candidate.url} target="_blank" rel="noreferrer">
+      <a
+        className="openLink"
+        href={candidate.url}
+        target="_blank"
+        rel="noreferrer"
+      >
         Open original ↗
       </a>
     </article>
@@ -1097,7 +1170,8 @@ function InterfaceOverrides() {
         padding: 28px;
         background:
           linear-gradient(var(--panel), var(--panel)) padding-box,
-          linear-gradient(120deg, #f28b82, #fdd663, #81c995, #78d9ec, #8ab4f8) border-box;
+          linear-gradient(120deg, #f28b82, #fdd663, #81c995, #78d9ec, #8ab4f8)
+            border-box;
         border: 1px solid transparent;
         box-shadow: var(--shadow);
         display: grid;
