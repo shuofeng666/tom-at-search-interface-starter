@@ -21,9 +21,20 @@ type SearchPoolResponse = {
 
 const PAGE_SIZE = 8;
 
-const MIN_VISIBLE_SCORE = 2;
+const MIN_VISIBLE_SCORE = 1;
+
+function isTomCandidate(candidate: CandidateProject) {
+  const sourceText = `${candidate.source} ${candidate.url} ${candidate.sourceType}`.toLowerCase();
+
+  return (
+    candidate.sourceType === "TOM project" ||
+    sourceText.includes("tomglobal.org")
+  );
+}
 
 function isVisibleCandidate(candidate: CandidateProject) {
+  if (isTomCandidate(candidate)) return true;
+
   return (candidate.evaluation?.overallScore ?? 0) >= MIN_VISIBLE_SCORE;
 }
 
@@ -38,8 +49,6 @@ const rejectionOptions = [
   { value: "not-available", label: "not available locally" },
   { value: "poor-documentation", label: "documentation is incomplete" },
 ];
-
-
 
 export default function Home() {
   const [stage, setStage] = useState<Stage>("intake");
@@ -205,12 +214,12 @@ export default function Home() {
 
       // Score only the first page; the rest waits behind "Load more".
       const firstBatch = fetchedPool.slice(0, PAGE_SIZE);
-const scored = await scoreBatch(firstBatch);
-const visibleScored = scored.filter(isVisibleCandidate);
+      const scored = await scoreBatch(firstBatch);
+      const visibleScored = scored.filter(isVisibleCandidate);
 
-setCandidates(visibleScored);
-setPoolCursor(firstBatch.length);
-setSelectedCandidateId(visibleScored[0]?.id || null);
+      setCandidates(visibleScored);
+      setPoolCursor(firstBatch.length);
+      setSelectedCandidateId(visibleScored[0]?.id || null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Search failed.";
       setError(message);
@@ -231,11 +240,11 @@ setSelectedCandidateId(visibleScored[0]?.id || null);
 
     try {
       const nextBatch = pool.slice(poolCursor, poolCursor + PAGE_SIZE);
-const scored = await scoreBatch(nextBatch);
-const visibleScored = scored.filter(isVisibleCandidate);
+      const scored = await scoreBatch(nextBatch);
+      const visibleScored = scored.filter(isVisibleCandidate);
 
-setCandidates((previous) => [...previous, ...visibleScored]);
-setPoolCursor((previous) => previous + nextBatch.length);
+      setCandidates((previous) => [...previous, ...visibleScored]);
+      setPoolCursor((previous) => previous + nextBatch.length);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Load more failed.";
       setError(message);
@@ -536,33 +545,34 @@ function ReviewScreen({
 }) {
   return (
     <section className="workspace">
-     <header className="workspaceHeader">
-  <button className="plainBtn" onClick={onBackToIntake}>
-    ← Intake
-  </button>
+      <header className="workspaceHeader">
+        <button className="plainBtn" onClick={onBackToIntake}>
+          ← Intake
+        </button>
 
-  <div>
-    <h1>Search review</h1>
-    <p>Check whether these projects match the need before preparing a summary.</p>
-  </div>
+        <div>
+          <h1>Search review</h1>
+          <p>
+            Check whether these projects match the need before preparing a
+            summary.
+          </p>
+        </div>
 
-  <div className="headerNeedCheck">
-    <div>
-      <p className="headerNeedCheckTitle">Does this match the need?</p>
-      <p className="headerNeedCheckText">
-        If the results feel off, add one more detail before summarizing.
-      </p>
-    </div>
+        <div className="headerNeedCheck">
+          <div>
+            <p className="headerNeedCheckTitle">Does this match the need?</p>
+            <p className="headerNeedCheckText">
+              If the results feel off, add one more detail before summarizing.
+            </p>
+          </div>
 
-    <div className="headerNeedCheckActions">
-      <button className="sendBtn" onClick={onBackToIntake}>
-        Add more details
-      </button>
-
-
-    </div>
-  </div>
-</header>
+          <div className="headerNeedCheckActions">
+            <button className="sendBtn" onClick={onBackToIntake}>
+              Add more details
+            </button>
+          </div>
+        </div>
+      </header>
 
       <div className="workspaceGrid">
         <aside className="panel leftPanel">
@@ -620,7 +630,6 @@ function ReviewScreen({
         </section>
 
         <aside className="panel detailPanel">
-       
           {selectedCandidate ? (
             <CandidateDetail
               candidate={selectedCandidate}
@@ -685,16 +694,10 @@ function SearchReflectionPanel({
       </p>
 
       {(missingHints.length > 0 || unmatchedHints.length > 0) && (
-        <div className="reflectionHints">
-
-        </div>
+        <div className="reflectionHints"></div>
       )}
 
-      <div className="reflectionActions">
-
-
-
-      </div>
+      <div className="reflectionActions"></div>
     </section>
   );
 }
@@ -845,6 +848,24 @@ function ChipRow({
   );
 }
 
+function sourceToneClass(candidate: CandidateProject) {
+  const source = candidate.source.toLowerCase();
+
+  if (
+    candidate.sourceType === "TOM project" ||
+    source.includes("tomglobal.org")
+  ) {
+    return "tom";
+  }
+
+  if (candidate.sourceType === "DIY project") return "diy";
+  if (candidate.sourceType === "open-source project") return "open";
+  if (candidate.sourceType === "commercial product") return "commercial";
+  if (candidate.sourceType === "research prototype") return "research";
+
+  return "unknown";
+}
+
 function formatSourceLabel(source: string) {
   const normalized = source.toLowerCase().replace(/^www\./, "");
 
@@ -866,7 +887,7 @@ function CandidateRow({
   active,
   selected,
   onSelect,
-  onToggleComparison
+  onToggleComparison,
 }: {
   candidate: CandidateProject;
   active: boolean;
@@ -899,9 +920,11 @@ function CandidateRow({
 
       <div className="cardBody">
         <div className="sourceMeta">
-  <span className="cardType">{candidate.sourceType}</span>
-  <span className="sourceBadge">{formatSourceLabel(candidate.source)}</span>
-</div>
+          <span className="cardType">{candidate.sourceType}</span>
+          <span className={`sourceBadge ${sourceToneClass(candidate)}`}>
+            {formatSourceLabel(candidate.source)}
+          </span>
+        </div>
         <h3 className="cardTitle">{candidate.title}</h3>
         <p className="cardTeaser">{candidate.summary}</p>
 
@@ -935,7 +958,7 @@ function CandidateDetail({
   candidate,
   selected,
   onToggleComparison,
-  onReject
+  onReject,
 }: {
   candidate: CandidateProject;
   selected: boolean;
@@ -949,14 +972,21 @@ function CandidateDetail({
     <article className="candidateDetail">
       <div className="detailHead">
         <div className="sourceMeta">
-  <span className="cardType">{candidate.sourceType}</span>
-  <span className="sourceBadge">{formatSourceLabel(candidate.source)}</span>
-</div>
+          <span className="cardType">{candidate.sourceType}</span>
+          <span className="sourceBadge">
+            {formatSourceLabel(candidate.source)}
+          </span>
+        </div>
       </div>
 
       <h2>{candidate.title}</h2>
 
-      <a className="openOriginal" href={candidate.url} target="_blank" rel="noreferrer">
+      <a
+        className="openOriginal"
+        href={candidate.url}
+        target="_blank"
+        rel="noreferrer"
+      >
         Open original ↗
       </a>
 
@@ -986,8 +1016,16 @@ function CandidateDetail({
         </p>
       </div>
 
-      <ChipRow label="Matched needs" items={evaluation.matchedCriteria} tone="good" />
-      <ChipRow label="Possible mismatches" items={evaluation.unmatchedCriteria} tone="bad" />
+      <ChipRow
+        label="Matched needs"
+        items={evaluation.matchedCriteria}
+        tone="good"
+      />
+      <ChipRow
+        label="Possible mismatches"
+        items={evaluation.unmatchedCriteria}
+        tone="bad"
+      />
 
       <details className="rawSummary">
         <summary>Full source summary</summary>
@@ -1006,7 +1044,10 @@ function CandidateDetail({
       <div className="rejectBox">
         <label>Why does this not fit?</label>
 
-        <select value={reason} onChange={(event) => setReason(event.target.value)}>
+        <select
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+        >
           {rejectionOptions.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -1025,8 +1066,6 @@ function CandidateDetail({
     </article>
   );
 }
-
-
 
 function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
   return (
@@ -1048,8 +1087,9 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
               <td>{candidate.sourceType}</td>
               <td>{candidate.evaluation.impact.explanation}</td>
               <td>
-                {candidate.evaluation.missingInformation.slice(0, 2).join(", ") ||
-                  "No major unknowns"}
+                {candidate.evaluation.missingInformation
+                  .slice(0, 2)
+                  .join(", ") || "No major unknowns"}
               </td>
             </tr>
           ))}

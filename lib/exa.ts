@@ -113,6 +113,12 @@ export async function fetchPrioritizedPool({
   const secondaryDomains = parseDomainList(process.env.EXA_SECONDARY_DOMAINS);
   const commercialDomains = parseDomainList(process.env.EXA_COMMERCIAL_DOMAINS);
 
+  console.log("EXA domain groups", {
+  primaryDomains,
+  secondaryDomains,
+  commercialDomains
+});
+
   const fetchDomainGroup = async (domains: string[], perDomain: number) => {
     if (!domains.length || perDomain <= 0) return [];
 
@@ -136,6 +142,17 @@ export async function fetchPrioritizedPool({
       fetchDomainGroup(secondaryDomains, secondaryPerDomain),
       fetchDomainGroup(commercialDomains, commercialPerDomain)
     ]);
+
+    console.log("EXA result counts", {
+  primary: primaryResults.length,
+  secondary: secondaryResults.length,
+  commercial: commercialResults.length
+});
+
+console.log(
+  "Primary TOM URLs",
+  primaryResults.map((result) => result.url)
+);
 
   const merged = [
     ...primaryResults,
@@ -240,8 +257,14 @@ export function buildSearchQuery(needProfile: NeedProfile, customQuery?: string)
 export function detectSourceType(url: string): CandidateSourceType {
   const lower = url.toLowerCase();
 
-  if (lower.includes("https://tomglobal.org")) return "TOM project";
-  if (lower.includes("instructables.com")) return "DIY project";
+  if (lower.includes("tomglobal.org")) {
+    return "TOM project";
+  }
+
+  if (lower.includes("instructables.com")) {
+    return "DIY project";
+  }
+
   if (
     lower.includes("thingiverse.com") ||
     lower.includes("printables.com") ||
@@ -249,6 +272,7 @@ export function detectSourceType(url: string): CandidateSourceType {
   ) {
     return "open-source project";
   }
+
   if (
     lower.includes("amazon.") ||
     lower.includes("walmart.") ||
@@ -257,6 +281,7 @@ export function detectSourceType(url: string): CandidateSourceType {
   ) {
     return "commercial product";
   }
+
   if (
     lower.includes("pubmed") ||
     lower.includes("acm.org") ||
