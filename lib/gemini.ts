@@ -102,3 +102,20 @@ export function toScore(value: unknown): number {
 
   return Math.max(0, Math.min(3, value));
 }
+
+export async function callOpenAIJson<T>(options: {
+  schemaName: string;
+  schema: unknown;
+  system: string;
+  user: string;
+}): Promise<T | null> {
+  return generateGeminiJson<T>({
+    prompt: [
+      options.system,
+      options.user,
+      `Return only valid JSON matching the schema "${options.schemaName}":`,
+      JSON.stringify(options.schema, null, 2),
+    ].join("\n\n"),
+    temperature: 0.2,
+  });
+}
