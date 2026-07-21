@@ -34,7 +34,14 @@ type TomProject = {
 
 const MIN_FALLBACK_LOCAL_SCORE = 3;
 const MAX_KEYWORD_QUERIES = 12;
-const BROAD_FALLBACK_LIMIT = 40;
+
+// Instead of sampling a small "broad" page and hoping the right project is in
+// it, page through the whole catalog (it's a small db, ~1000 items) once and
+// score every item locally against the need profile. Cached in-process so
+// repeat searches on a warm server reuse it instead of re-paginating.
+const CATALOG_PAGE_SIZE = 100;
+const CATALOG_MAX_PAGES = 10;
+const CATALOG_CACHE_TTL_MS = 10 * 60 * 1000;
 
 export async function searchTomProjects({
   needProfile,
@@ -64,30 +71,27 @@ export async function searchTomProjects({
     used: keywordQueries
   });
 
-  // Run keyword queries AND a broad listing fetch in parallel. TOM's own
+  // Run keyword queries AND a full-catalog fetch in parallel. TOM's own
   // keyword search does literal/substring matching, so it can miss projects
   // whose title/description just doesn't happen to contain the exact term.
-  // The broad batch is scored locally against the full need profile, which
+  // The catalog is scored locally against the full need profile, which
   // catches relevant projects keyword search alone would have missed —
-  // rather than only kicking in when keyword search came up short.
-  const [keywordBatches, broadBatch] = await Promise.all([
+  // rather than only kicking in when keyword search came up short, and
+  // rather than only sampling a small slice of the database.
+  const [keywordBatches, catalog] = await Promise.all([
     Promise.all(
       keywordQueries.map((userInput) =>
         fetchTomProjectCandidates({ endpoint, userInput, limit })
       )
     ),
-    fetchTomProjectCandidates({
-      endpoint,
-      userInput: "",
-      limit: BROAD_FALLBACK_LIMIT
-    })
+    getTomCatalog(endpoint)
   ]);
 
   const keywordMatched = mergeTomCandidates(keywordBatches.flat(), []);
 
   const localKeywords = buildTomKeywords(needProfile);
   const fallbackRanked = rankTomCandidatesByNeed(
-    broadBatch,
+    catalog,
     needProfile,
     expandedTerms
   ).filter(
@@ -334,6 +338,110 @@ function buildTomKeywords(needProfile: NeedProfile) {
         .filter((word) => !stopwords.has(word))
     )
   ).slice(0, 12);
+}
+
+let catalogCache: { items: CandidateProject[]; fetchedAt: number } | null =
+  null;
+let catalogFetchInFlight: Promise<CandidateProject[]> | null = null;
+
+// Page through the whole TOM catalog once (bounded by CATALOG_MAX_PAGES) and
+// cache it in-process. Concurrent callers share the same in-flight fetch
+// instead of triggering duplicate pagination.
+async function getTomCatalog(endpoint: string): Promise<CandidateProject[]> {
+  if (catalogCache && Date.now() - catalogCache.fetchedAt < CATALOG_CACHE_TTL_MS) {
+    return catalogCache.items;
+  }
+
+  if (catalogFetchInFlight) return catalogFetchInFlight;
+
+  catalogFetchInFlight = (async () => {
+    try {
+      const first = await fetchTomProjectPage({
+        endpoint,
+        skip: 0,
+        limit: CATALOG_PAGE_SIZE
+      });
+
+      const pagesToFetch = Math.min(
+        Math.max(first.totalPages, 1),
+        CATALOG_MAX_PAGES
+      );
+
+      const restPages = await Promise.all(
+        Array.from({ length: Math.max(0, pagesToFetch - 1) }, (_, index) =>
+          fetchTomProjectPage({
+            endpoint,
+            skip: (index + 1) * CATALOG_PAGE_SIZE,
+            limit: CATALOG_PAGE_SIZE
+          })
+        )
+      );
+
+      const items = mergeTomCandidates(
+        first.candidates,
+        restPages.flatMap((page) => page.candidates)
+      );
+
+      console.log("TOM full catalog fetched", {
+        totalPages: first.totalPages,
+        pagesFetched: pagesToFetch,
+        items: items.length
+      });
+
+      catalogCache = { items, fetchedAt: Date.now() };
+      return items;
+    } catch (error) {
+      console.error("TOM catalog fetch failed, falling back to empty catalog", error);
+      return catalogCache?.items || [];
+    } finally {
+      catalogFetchInFlight = null;
+    }
+  })();
+
+  return catalogFetchInFlight;
+}
+
+async function fetchTomProjectPage({
+  endpoint,
+  skip,
+  limit
+}: {
+  endpoint: string;
+  skip: number;
+  limit: number;
+}): Promise<{ candidates: CandidateProject[]; totalPages: number }> {
+  try {
+    const url = new URL(endpoint);
+
+    url.searchParams.set("skip", String(skip));
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("selectedTypes", "5");
+    url.searchParams.set("userInput", "");
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        Accept: "application/json"
+      },
+      cache: "no-store"
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("TOM API error (catalog page):", res.status, text.slice(0, 300));
+      return { candidates: [], totalPages: 0 };
+    }
+
+    const data = (await res.json()) as TomSearchResponse;
+    const items = data.projects?.items || [];
+
+    return {
+      candidates: items.map(buildTomCandidate),
+      totalPages: data.projects?.totalNumberOfPages || 0
+    };
+  } catch (error) {
+    console.error("TOM catalog page fetch failed:", skip, error);
+    return { candidates: [], totalPages: 0 };
+  }
 }
 
 async function fetchTomProjectCandidates({
