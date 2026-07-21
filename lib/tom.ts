@@ -32,9 +32,9 @@ type TomProject = {
   };
 };
 
-const MIN_TOM_RESULTS = 3;
 const MIN_FALLBACK_LOCAL_SCORE = 3;
-const MAX_KEYWORD_QUERIES = 8;
+const MAX_KEYWORD_QUERIES = 12;
+const BROAD_FALLBACK_LIMIT = 40;
 
 export async function searchTomProjects({
   needProfile,
@@ -64,44 +64,44 @@ export async function searchTomProjects({
     used: keywordQueries
   });
 
-  const keywordBatches = await Promise.all(
-    keywordQueries.map((userInput) =>
-      fetchTomProjectCandidates({ endpoint, userInput, limit })
-    )
-  );
+  // Run keyword queries AND a broad listing fetch in parallel. TOM's own
+  // keyword search does literal/substring matching, so it can miss projects
+  // whose title/description just doesn't happen to contain the exact term.
+  // The broad batch is scored locally against the full need profile, which
+  // catches relevant projects keyword search alone would have missed —
+  // rather than only kicking in when keyword search came up short.
+  const [keywordBatches, broadBatch] = await Promise.all([
+    Promise.all(
+      keywordQueries.map((userInput) =>
+        fetchTomProjectCandidates({ endpoint, userInput, limit })
+      )
+    ),
+    fetchTomProjectCandidates({
+      endpoint,
+      userInput: "",
+      limit: BROAD_FALLBACK_LIMIT
+    })
+  ]);
 
   const keywordMatched = mergeTomCandidates(keywordBatches.flat(), []);
 
-  let merged = keywordMatched;
+  const localKeywords = buildTomKeywords(needProfile);
+  const fallbackRanked = rankTomCandidatesByNeed(
+    broadBatch,
+    needProfile,
+    expandedTerms
+  ).filter(
+    (candidate) =>
+      scoreTomCandidate(candidate, localKeywords, expandedTerms) >=
+      MIN_FALLBACK_LOCAL_SCORE
+  );
 
-  if (merged.length < MIN_TOM_RESULTS) {
-    const broadBatch = await fetchTomProjectCandidates({
-      endpoint,
-      userInput: "",
-      limit
-    });
-
-    const fallbackRanked = rankTomCandidatesByNeed(
-      broadBatch,
-      needProfile,
-      expandedTerms
-    ).filter((candidate) => {
-      return (
-        scoreTomCandidate(
-          candidate,
-          buildTomKeywords(needProfile),
-          expandedTerms
-        ) >= MIN_FALLBACK_LOCAL_SCORE
-      );
-    });
-
-    merged = mergeTomCandidates(merged, fallbackRanked);
-  }
-
+  const merged = mergeTomCandidates(keywordMatched, fallbackRanked);
   const ranked = rankTomCandidatesByNeed(merged, needProfile, expandedTerms);
 
   console.log("TOM merged/ranked results", {
     keywordMatched: keywordMatched.length,
+    fallbackMatched: fallbackRanked.length,
     returned: ranked.slice(0, limit).length
   });
 

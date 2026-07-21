@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   CandidateProject,
   ChatMessage,
@@ -22,7 +22,7 @@ type SearchPoolResponse = {
 const PAGE_SIZE = 8;
 
 const MIN_VISIBLE_SCORE = 1;
-const MIN_VISIBLE_TOM_SCORE = 1.5;
+const MIN_VISIBLE_TOM_SCORE = 1;
 
 function isTomCandidate(candidate: CandidateProject) {
   const sourceText = `${candidate.source} ${candidate.url} ${candidate.sourceType}`.toLowerCase();
@@ -503,6 +503,15 @@ function IntakeScreen({
     onSubmit();
   }
 
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = chatMessagesRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, suggestedReplies]);
+
   const userTurnCount = messages.filter(
     (message) => message.role === "user",
   ).length;
@@ -543,7 +552,7 @@ function IntakeScreen({
       </div>
 
       <div className="chatWindow">
-        <div className="chatMessages">
+        <div className="chatMessages" ref={chatMessagesRef}>
           {messages.map((message) => (
             <div key={message.id} className={`message ${message.role}`}>
               <p>{message.content}</p>
@@ -658,6 +667,9 @@ function ReviewScreen({
           <div className="headerNeedCheckActions">
             <button className="sendBtn" onClick={onBackToIntake}>
               Add more details
+            </button>
+            <button className="plainBtn" onClick={() => location.reload()}>
+              New search
             </button>
           </div>
         </div>

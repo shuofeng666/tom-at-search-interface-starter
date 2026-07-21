@@ -8,13 +8,17 @@ export const runtime = "nodejs";
 
 // Phase 1: FETCH ONLY. Pull a pool from TOM + external sources.
 // The frontend scores PAGE_SIZE candidates at a time via /api/evaluate.
-const TOM_LIMIT = 15;
-const PRIMARY_PER_DOMAIN = 0;
+const TOM_LIMIT = 20;
+// Also let Exa search tomglobal.org directly (EXA_PRIMARY_DOMAINS) as a
+// semantic-search supplement to the TOM API's literal keyword search below —
+// it was previously disabled (0), which meant tomglobal.org results only
+// ever came from the keyword-matched TOM API call.
+const PRIMARY_PER_DOMAIN = 6;
 const SECONDARY_PER_DOMAIN = 3;
 const COMMERCIAL_PER_DOMAIN = 3;
 
 const FIRST_PAGE_SIZE = 8;
-const TOM_FIRST_PAGE_SLOTS = 3;
+const TOM_FIRST_PAGE_SLOTS = 4;
 
 export type SearchPoolResponse = {
   query: string;

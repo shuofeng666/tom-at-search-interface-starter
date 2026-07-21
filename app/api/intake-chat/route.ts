@@ -204,6 +204,20 @@ Mandatory fields before internal search:
 10. environment: where the solution will be used
 11. criteria: at least one must-have, must-avoid, safety concern, or preference
 
+Relevance check before every question:
+- These 11 fields are things to fill in the profile when they matter, not a fixed
+  interview script. Before asking about any of them, ask yourself: "would knowing
+  this actually change which products I'd search for or recommend?"
+- If the answer is no for this specific need (e.g. asking where a card holder will
+  be used rarely changes what card holder to look for), do not ask it. Instead fill
+  that field with "not applicable to this need" and move on.
+- Only spend a question on environment, current devices, or context when the
+  activity is the kind where location/setting genuinely changes the right solution
+  (mobility, transfers, outdoor use, bathroom/kitchen setups, attachment to another
+  device, etc.).
+- Never ask a question purely to complete the checklist. Every question you ask
+  should be one you can justify as changing the search.
+
 Question priority:
 1. If the practical challenge is unclear, ask what daily activity they want to do.
 2. If the activity is clear but the barrier is unclear, ask what specifically makes it difficult or unsafe.
@@ -336,11 +350,19 @@ Readiness rules:
 - Set readyForInternalSearch = false if country/region is missing.
 - Set readyForInternalSearch = false if seekerRole is unknown.
 - Set readyForInternalSearch = false if you only know an object/category but not the lived activity barrier.
-- Set readyForInternalSearch = true only when the structured profile is specific enough for internal search.
+- Environment, currentDevices, userContext, and bodyFunction do NOT each need a real
+  answer to be ready — "not applicable to this need" is a valid, complete answer for
+  any of them. Only keep asking about one of these if it would truly change the
+  search (see the relevance check above).
+- Set readyForInternalSearch = true once activity, problem, desiredOutcome, seekerRole,
+  age, and location are known and every other field is either filled in or explicitly
+  marked not applicable.
 - When readyForInternalSearch = true, stop asking questions.
-- The assistantMessage should feel like a natural handoff, not a status label.
+- The assistantMessage should feel like a natural handoff, not a status label, and it
+  MUST tell the user their next action explicitly.
 - Do not say "Ready to search".
-- Say something like: "I think we have enough to start a useful search. I'll look for projects or solutions that..."
+- Say something like: "I think we have enough information. Click 'Search related
+  projects' below to review relevant projects for [short restatement of the need]."
 - Keep the summary short: one sentence for the understood need, one sentence for the search direction.
 - Return suggestedReplies = [] when readyForInternalSearch = true.
 `;
@@ -545,7 +567,7 @@ function buildDefaultHandoffReason(profile: NeedProfile) {
     .filter(Boolean)
     .join(", ");
 
-return `I think we have enough to start a useful search: the person wants to ${profile.activity}, but ${profile.problem}. The goal is to ${profile.desiredOutcome}.${location ? ` I'll also keep the location in mind: ${location}.` : ""}`;
+return `I think we have enough information: the person wants to ${profile.activity}, but ${profile.problem}. The goal is to ${profile.desiredOutcome}.${location ? ` Location: ${location}.` : ""} Click "Search related projects" below to review relevant projects.`;
 }
 
 function getString(input: unknown, fallback = "") {
