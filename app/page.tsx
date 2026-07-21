@@ -81,20 +81,55 @@ function isVisibleCandidate(candidate: CandidateProject) {
 
 function candidateDisplayScore(candidate: CandidateProject) {
   const score = candidate.evaluation?.overallScore ?? 0;
-  const tomTieBreaker = isTomCandidate(candidate) ? 0.15 : 0;
   const badMatchPenalty = isClearlyBadMatch(candidate) ? 4 : 0;
 
-  return score + tomTieBreaker - badMatchPenalty;
+  return score - badMatchPenalty;
 }
 
+// TOM projects always lead the list (this is TOM's own search interface), then
+// everything else is ranked by fit score within its group.
 function sortDisplayCandidates(candidates: CandidateProject[]) {
-  return [...candidates].sort(
-    (a, b) => candidateDisplayScore(b) - candidateDisplayScore(a)
-  );
+  return [...candidates].sort((a, b) => {
+    const aTom = isTomCandidate(a) ? 1 : 0;
+    const bTom = isTomCandidate(b) ? 1 : 0;
+
+    if (aTom !== bTom) return bTom - aTom;
+
+    return candidateDisplayScore(b) - candidateDisplayScore(a);
+  });
 }
+
+// Guarantee TOM is represented even when no TOM candidate cleared the normal
+// visibility bar: backfill with the best-scoring TOM candidates that aren't a
+// clear mismatch, up to MIN_GUARANTEED_TOM_VISIBLE. Never backfills with a
+// candidate flagged as a clear mismatch — a guaranteed slot still has to be a
+// plausible fit.
+const MIN_GUARANTEED_TOM_VISIBLE = 2;
 
 function prepareVisibleCandidates(scored: CandidateProject[]) {
-  return sortDisplayCandidates(scored.filter(isVisibleCandidate));
+  const visible = scored.filter(isVisibleCandidate);
+  const visibleTomCount = visible.filter(isTomCandidate).length;
+
+  if (visibleTomCount >= MIN_GUARANTEED_TOM_VISIBLE) {
+    return sortDisplayCandidates(visible);
+  }
+
+  const visibleIds = new Set(visible.map((candidate) => candidate.id));
+
+  const tomBackfill = scored
+    .filter(
+      (candidate) =>
+        isTomCandidate(candidate) &&
+        !visibleIds.has(candidate.id) &&
+        !isClearlyBadMatch(candidate),
+    )
+    .sort(
+      (a, b) =>
+        (b.evaluation?.overallScore ?? 0) - (a.evaluation?.overallScore ?? 0),
+    )
+    .slice(0, MIN_GUARANTEED_TOM_VISIBLE - visibleTomCount);
+
+  return sortDisplayCandidates([...visible, ...tomBackfill]);
 }
 
 function fitHeading(candidate: CandidateProject) {
