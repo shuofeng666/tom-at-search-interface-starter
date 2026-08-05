@@ -4,6 +4,7 @@ import {
   NeedProfile
 } from "./types";
 import { generateGeminiJson, toStringArray } from "./gemini";
+import { searchTomCsvProjects } from "./tomCsv";
 
 type TomSearchResponse = {
   projects?: {
@@ -51,10 +52,13 @@ export async function searchTomProjects({
   limit?: number;
 }): Promise<CandidateProject[]> {
   const endpoint = process.env.TOM_SEARCH_API_URL;
+  const csvCandidates = searchTomCsvProjects({ needProfile, limit });
 
   if (!endpoint) {
-    console.warn("Missing TOM_SEARCH_API_URL. TOM projects will be skipped.");
-    return [];
+    console.warn(
+      "Missing TOM_SEARCH_API_URL. Using TOM CSV projects only, if available."
+    );
+    return csvCandidates.slice(0, limit);
   }
 
   const expandedTerms = await expandTomSearchTerms(needProfile);
@@ -100,10 +104,14 @@ export async function searchTomProjects({
       MIN_FALLBACK_LOCAL_SCORE
   );
 
-  const merged = mergeTomCandidates(keywordMatched, fallbackRanked);
+  const merged = mergeTomCandidates(
+    csvCandidates,
+    mergeTomCandidates(keywordMatched, fallbackRanked)
+  );
   const ranked = rankTomCandidatesByNeed(merged, needProfile, expandedTerms);
 
   console.log("TOM merged/ranked results", {
+    csvMatched: csvCandidates.length,
     keywordMatched: keywordMatched.length,
     fallbackMatched: fallbackRanked.length,
     returned: ranked.slice(0, limit).length
