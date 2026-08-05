@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   CandidateProject,
   emptyCandidateEvaluation,
@@ -5,43 +7,17 @@ import {
 } from "./types";
 import { generateGeminiJson, toStringArray } from "./gemini";
 
-type TomSearchResponse = {
-  projects?: {
-    totalNumberOfPages?: number;
-    items?: TomProject[];
-  };
-};
+// TOM's own search API did literal keyword matching against a live endpoint,
+// which was slow (one HTTP round trip per guessed keyword), incomplete (only
+// ever sampled a page of results at a time), and frequently missed projects
+// whose title/description just didn't contain the exact guessed word (e.g. a
+// project literally named "Lefty - One Hand Diaper Changer" never surfaced
+// for "diaper" style queries). This is now a static export TOM provided
+// (data/tom-solutions.csv) that we load once and score entirely locally —
+// no network calls, no guessing, no missed pages.
+const CSV_PATH = path.join(process.cwd(), "data", "tom-solutions.csv");
 
-type TomProject = {
-  _id: string;
-  projectName?: string;
-  challengeName?: string;
-  description?: string;
-  resources?: string;
-  downloadLink?: string;
-  thumbnailImageUrl?: string;
-  imagesUrls?: string[];
-  type?: number;
-  technicalRequirements?: string[];
-  additionalInformation?: {
-    challengeDetails?: string;
-    disabledPersonDetails?: string;
-    teamRequirements?: string;
-    teamName?: string;
-    challengeImage?: string;
-  };
-};
-
-const MIN_FALLBACK_LOCAL_SCORE = 3;
-const MAX_KEYWORD_QUERIES = 12;
-
-// Instead of sampling a small "broad" page and hoping the right project is in
-// it, page through the whole catalog (it's a small db, ~1000 items) once and
-// score every item locally against the need profile. Cached in-process so
-// repeat searches on a warm server reuse it instead of re-paginating.
-const CATALOG_PAGE_SIZE = 100;
-const CATALOG_MAX_PAGES = 10;
-const CATALOG_CACHE_TTL_MS = 10 * 60 * 1000;
+let catalogCache: CandidateProject[] | null = null;
 
 export async function searchTomProjects({
   needProfile,
@@ -50,154 +26,77 @@ export async function searchTomProjects({
   needProfile: NeedProfile;
   limit?: number;
 }): Promise<CandidateProject[]> {
-  const endpoint = process.env.TOM_SEARCH_API_URL;
+  const catalog = getTomCatalog();
 
-  if (!endpoint) {
-    console.warn("Missing TOM_SEARCH_API_URL. TOM projects will be skipped.");
+  if (!catalog.length) {
+    console.warn(
+      `TOM solutions catalog is empty. Check ${CSV_PATH} exists and is readable.`
+    );
     return [];
   }
 
   const expandedTerms = await expandTomSearchTerms(needProfile);
-  const heuristicTerms = buildTomSearchTerms(needProfile);
+  const keywords = buildLocalMatchTerms(needProfile);
 
-  const keywordQueries = dedupeTerms([
-    ...expandedTerms,
-    ...heuristicTerms
-  ]).slice(0, MAX_KEYWORD_QUERIES);
+  const ranked = rankTomCandidatesByNeed(catalog, keywords, expandedTerms);
 
-  console.log("TOM keyword queries", {
-    fromLLM: expandedTerms,
-    fromHeuristic: heuristicTerms,
-    used: keywordQueries
-  });
-
-  // Run keyword queries AND a full-catalog fetch in parallel. TOM's own
-  // keyword search does literal/substring matching, so it can miss projects
-  // whose title/description just doesn't happen to contain the exact term.
-  // The catalog is scored locally against the full need profile, which
-  // catches relevant projects keyword search alone would have missed —
-  // rather than only kicking in when keyword search came up short, and
-  // rather than only sampling a small slice of the database.
-  const [keywordBatches, catalog] = await Promise.all([
-    Promise.all(
-      keywordQueries.map((userInput) =>
-        fetchTomProjectCandidates({ endpoint, userInput, limit })
-      )
-    ),
-    getTomCatalog(endpoint)
-  ]);
-
-  const keywordMatched = mergeTomCandidates(keywordBatches.flat(), []);
-
-  const localKeywords = buildTomKeywords(needProfile);
-  const fallbackRanked = rankTomCandidatesByNeed(
-    catalog,
-    needProfile,
-    expandedTerms
-  ).filter(
-    (candidate) =>
-      scoreTomCandidate(candidate, localKeywords, expandedTerms) >=
-      MIN_FALLBACK_LOCAL_SCORE
-  );
-
-  const merged = mergeTomCandidates(keywordMatched, fallbackRanked);
-  const ranked = rankTomCandidatesByNeed(merged, needProfile, expandedTerms);
-
-  console.log("TOM merged/ranked results", {
-    keywordMatched: keywordMatched.length,
-    fallbackMatched: fallbackRanked.length,
-    returned: ranked.slice(0, limit).length
+  console.log("TOM catalog match", {
+    catalogSize: catalog.length,
+    expandedTerms,
+    keywords,
+    top: ranked.slice(0, limit).map((candidate) => candidate.title)
   });
 
   return ranked.slice(0, limit);
 }
 
-/**
- * Short, high-recall search terms. TOM search works best with single nouns
- * ("wheelchair", "walker", "grip") or two-word device names.
- */
-function buildTomSearchTerms(needProfile: NeedProfile): string[] {
-  const terms: string[] = [];
+function getTomCatalog(): CandidateProject[] {
+  if (catalogCache) return catalogCache;
 
-  const push = (term: string | undefined) => {
-    const clean = (term || "").trim().toLowerCase();
-    if (!clean) return;
-    if (clean.length < 3 || clean.length > 40) return;
-    if (GENERIC_TERMS.has(clean)) return;
-    if (!terms.includes(clean)) terms.push(clean);
-  };
+  try {
+    const raw = fs.readFileSync(CSV_PATH, "utf-8");
+    const rows = parseCsv(raw);
+    const records = rowsToRecords(rows);
 
-  // 1) Device names are the strongest signal: use the full phrase AND its
-  //    head noun ("manual wheelchair" -> "manual wheelchair", "wheelchair").
-  for (const device of needProfile.currentDevices) {
-    push(device);
-    const words = device.trim().split(/\s+/);
-    if (words.length > 1) push(words[words.length - 1]);
+    catalogCache = records
+      .map(buildTomCandidateFromRecord)
+      .filter((candidate): candidate is CandidateProject => candidate !== null);
+
+    console.log("TOM catalog loaded", { rows: catalogCache.length });
+  } catch (error) {
+    console.error("Failed to load TOM solutions CSV:", error);
+    catalogCache = [];
   }
 
-  // 2) Body function terms often map to TOM categories ("grip", "hand").
-  for (const fn of needProfile.bodyFunction) {
-    const words = fn.trim().split(/\s+/);
-    if (words.length <= 2) push(fn);
-    for (const word of words) push(word);
-  }
-
-  // 3) High-value single words from the rest of the profile.
-  for (const keyword of buildTomKeywords(needProfile)) {
-    push(keyword);
-  }
-
-  return terms.slice(0, MAX_KEYWORD_QUERIES);
+  return catalogCache;
 }
-
-// Words that are true but useless as TOM search terms.
-const GENERIC_TERMS = new Set([
-  "device",
-  "devices",
-  "solution",
-  "assistive",
-  "adaptive",
-  "technology",
-  "equipment",
-  "manual",
-  "electric",
-  "help",
-  "daily",
-  "independence",
-  "independent",
-  "unknown",
-  "none"
-]);
 
 function rankTomCandidatesByNeed(
   candidates: CandidateProject[],
-  needProfile: NeedProfile,
-  expandedTerms: string[] = []
+  keywords: string[],
+  expandedTerms: string[]
 ) {
-  const keywords = buildTomKeywords(needProfile);
-
   if (!keywords.length && !expandedTerms.length) return candidates;
 
-  return [...candidates].sort((a, b) => {
-    return (
+  return [...candidates].sort(
+    (a, b) =>
       scoreTomCandidate(b, keywords, expandedTerms) -
       scoreTomCandidate(a, keywords, expandedTerms)
-    );
-  });
+  );
 }
 
 function scoreTomCandidate(
   candidate: CandidateProject,
   keywords: string[],
-  expandedTerms: string[] = []
+  expandedTerms: string[]
 ) {
   const title = candidate.title.toLowerCase();
   const body = [candidate.summary, candidate.rawText].join(" ").toLowerCase();
 
   let score = 0;
 
-  // LLM-expanded category phrases are the strongest relevance signal:
-  // a title literally containing "cup holder" is almost certainly on-topic.
+  // LLM-expanded category phrases are the strongest relevance signal: a
+  // title literally containing "cup holder" is almost certainly on-topic.
   for (const term of expandedTerms) {
     if (title.includes(term)) score += 6;
     else if (body.includes(term)) score += 2;
@@ -212,82 +111,24 @@ function scoreTomCandidate(
 }
 
 /**
- * One cheap Gemini call: need profile -> concrete device-category search
- * terms. Cached per profile so "load more" / re-renders don't re-call it.
+ * Local match terms: device/body-function phrases kept whole (the strongest
+ * signal, e.g. "manual wheelchair"), plus single high-value words pulled from
+ * the rest of the need profile.
  */
-const expansionCache = new Map<string, string[]>();
+function buildLocalMatchTerms(needProfile: NeedProfile): string[] {
+  const terms: string[] = [];
 
-async function expandTomSearchTerms(
-  needProfile: NeedProfile
-): Promise<string[]> {
-  const cacheKey = JSON.stringify([
-    needProfile.activity,
-    needProfile.problem,
-    needProfile.desiredOutcome,
-    needProfile.currentDevices,
-    needProfile.bodyFunction,
-    needProfile.mustHave
-  ]);
+  const push = (term?: string) => {
+    const clean = (term || "").trim().toLowerCase();
+    if (!clean || clean.length < 3 || clean.length > 60) return;
+    if (!terms.includes(clean)) terms.push(clean);
+  };
 
-  const cached = expansionCache.get(cacheKey);
-  if (cached) return cached;
+  for (const device of needProfile.currentDevices) push(device);
+  for (const fn of needProfile.bodyFunction) push(fn);
+  for (const keyword of buildTomKeywords(needProfile)) push(keyword);
 
-  const prompt = [
-    "You translate an assistive-technology need into search keywords for a",
-    "small database (~1000 items) of open-source maker projects. The",
-    "database search only matches short literal keywords against project",
-    "titles and descriptions.",
-    "",
-    "Return JSON: {\"terms\": [...]} with 5-8 search terms. Rules:",
-    "- Each term is 1-3 words, lowercase, English.",
-    "- Each term names a CONCRETE product/device category, attachment, or",
-    "  mechanism that could solve the need. Include synonyms.",
-    "- Think like a maker naming a project, not like the user describing",
-    "  the problem.",
-    "",
-    "Example need: 'hold a phone or a drink hands-free while propelling a",
-    "manual wheelchair' ->",
-    "{\"terms\": [\"cup holder\", \"phone mount\", \"phone holder\",",
-    "\"bottle holder\", \"wheelchair attachment\", \"wheelchair tray\"]}",
-    "",
-    "Need profile:",
-    `- activity: ${needProfile.activity}`,
-    `- problem: ${needProfile.problem}`,
-    `- desired outcome: ${needProfile.desiredOutcome}`,
-    `- current devices: ${needProfile.currentDevices.join(", ") || "none"}`,
-    `- body function: ${needProfile.bodyFunction.join(", ") || "unknown"}`,
-    `- must have: ${needProfile.mustHave.join(", ") || "none"}`
-  ].join("\n");
-
-  try {
-    const parsed = await generateGeminiJson<{ terms?: unknown }>({
-      prompt,
-      temperature: 0.3
-    });
-
-    const terms = toStringArray(parsed?.terms)
-      .map((term) => term.toLowerCase().trim())
-      .filter((term) => term.length >= 3 && term.length <= 30)
-      .slice(0, 8);
-
-    expansionCache.set(cacheKey, terms);
-    return terms;
-  } catch (error) {
-    console.error("TOM query expansion failed, using heuristics only", error);
-    return [];
-  }
-}
-
-function dedupeTerms(terms: string[]) {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of terms) {
-    const term = raw.toLowerCase().trim();
-    if (!term || seen.has(term)) continue;
-    seen.add(term);
-    out.push(term);
-  }
-  return out;
+  return terms;
 }
 
 function buildTomKeywords(needProfile: NeedProfile) {
@@ -340,229 +181,230 @@ function buildTomKeywords(needProfile: NeedProfile) {
   ).slice(0, 12);
 }
 
-let catalogCache: { items: CandidateProject[]; fetchedAt: number } | null =
-  null;
-let catalogFetchInFlight: Promise<CandidateProject[]> | null = null;
+/**
+ * One cheap Gemini call: need profile -> concrete device-category search
+ * terms. Cached per profile so "load more" / re-renders don't re-call it.
+ */
+const expansionCache = new Map<string, string[]>();
 
-// Page through the whole TOM catalog once (bounded by CATALOG_MAX_PAGES) and
-// cache it in-process. Concurrent callers share the same in-flight fetch
-// instead of triggering duplicate pagination.
-async function getTomCatalog(endpoint: string): Promise<CandidateProject[]> {
-  if (catalogCache && Date.now() - catalogCache.fetchedAt < CATALOG_CACHE_TTL_MS) {
-    return catalogCache.items;
-  }
+async function expandTomSearchTerms(
+  needProfile: NeedProfile
+): Promise<string[]> {
+  const cacheKey = JSON.stringify([
+    needProfile.activity,
+    needProfile.problem,
+    needProfile.desiredOutcome,
+    needProfile.currentDevices,
+    needProfile.bodyFunction,
+    needProfile.mustHave
+  ]);
 
-  if (catalogFetchInFlight) return catalogFetchInFlight;
+  const cached = expansionCache.get(cacheKey);
+  if (cached) return cached;
 
-  catalogFetchInFlight = (async () => {
-    try {
-      const first = await fetchTomProjectPage({
-        endpoint,
-        skip: 0,
-        limit: CATALOG_PAGE_SIZE
-      });
+  const prompt = [
+    "You translate an assistive-technology need into search keywords for a",
+    "small database (~500 items) of open-source maker projects. The database",
+    "is matched by simple literal keyword overlap against project titles and",
+    "descriptions, not semantic search.",
+    "",
+    "Return JSON: {\"terms\": [...]} with 5-8 search terms. Rules:",
+    "- Each term is 1-3 words, lowercase, English.",
+    "- Each term names a CONCRETE product/device category, attachment, or",
+    "  mechanism that could solve the need. Include synonyms.",
+    "- Think like a maker naming a project, not like the user describing",
+    "  the problem.",
+    "",
+    "Example need: 'hold a phone or a drink hands-free while propelling a",
+    "manual wheelchair' ->",
+    "{\"terms\": [\"cup holder\", \"phone mount\", \"phone holder\",",
+    "\"bottle holder\", \"wheelchair attachment\", \"wheelchair tray\"]}",
+    "",
+    "Need profile:",
+    `- activity: ${needProfile.activity}`,
+    `- problem: ${needProfile.problem}`,
+    `- desired outcome: ${needProfile.desiredOutcome}`,
+    `- current devices: ${needProfile.currentDevices.join(", ") || "none"}`,
+    `- body function: ${needProfile.bodyFunction.join(", ") || "unknown"}`,
+    `- must have: ${needProfile.mustHave.join(", ") || "none"}`
+  ].join("\n");
 
-      const pagesToFetch = Math.min(
-        Math.max(first.totalPages, 1),
-        CATALOG_MAX_PAGES
-      );
-
-      const restPages = await Promise.all(
-        Array.from({ length: Math.max(0, pagesToFetch - 1) }, (_, index) =>
-          fetchTomProjectPage({
-            endpoint,
-            skip: (index + 1) * CATALOG_PAGE_SIZE,
-            limit: CATALOG_PAGE_SIZE
-          })
-        )
-      );
-
-      const items = mergeTomCandidates(
-        first.candidates,
-        restPages.flatMap((page) => page.candidates)
-      );
-
-      console.log("TOM full catalog fetched", {
-        totalPages: first.totalPages,
-        pagesFetched: pagesToFetch,
-        items: items.length
-      });
-
-      catalogCache = { items, fetchedAt: Date.now() };
-      return items;
-    } catch (error) {
-      console.error("TOM catalog fetch failed, falling back to empty catalog", error);
-      return catalogCache?.items || [];
-    } finally {
-      catalogFetchInFlight = null;
-    }
-  })();
-
-  return catalogFetchInFlight;
-}
-
-async function fetchTomProjectPage({
-  endpoint,
-  skip,
-  limit
-}: {
-  endpoint: string;
-  skip: number;
-  limit: number;
-}): Promise<{ candidates: CandidateProject[]; totalPages: number }> {
   try {
-    const url = new URL(endpoint);
-
-    url.searchParams.set("skip", String(skip));
-    url.searchParams.set("limit", String(limit));
-    url.searchParams.set("selectedTypes", "5");
-    url.searchParams.set("userInput", "");
-
-    const res = await fetch(url.toString(), {
-      headers: {
-        Accept: "application/json"
-      },
-      cache: "no-store"
+    const parsed = await generateGeminiJson<{ terms?: unknown }>({
+      prompt,
+      temperature: 0.3
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("TOM API error (catalog page):", res.status, text.slice(0, 300));
-      return { candidates: [], totalPages: 0 };
-    }
+    const terms = toStringArray(parsed?.terms)
+      .map((term) => term.toLowerCase().trim())
+      .filter((term) => term.length >= 3 && term.length <= 30)
+      .slice(0, 8);
 
-    const data = (await res.json()) as TomSearchResponse;
-    const items = data.projects?.items || [];
-
-    return {
-      candidates: items.map(buildTomCandidate),
-      totalPages: data.projects?.totalNumberOfPages || 0
-    };
+    expansionCache.set(cacheKey, terms);
+    return terms;
   } catch (error) {
-    console.error("TOM catalog page fetch failed:", skip, error);
-    return { candidates: [], totalPages: 0 };
-  }
-}
-
-async function fetchTomProjectCandidates({
-  endpoint,
-  userInput,
-  limit
-}: {
-  endpoint: string;
-  userInput: string;
-  limit: number;
-}): Promise<CandidateProject[]> {
-  try {
-    const url = new URL(endpoint);
-
-    url.searchParams.set("skip", "0");
-    url.searchParams.set("limit", String(limit));
-    url.searchParams.set("selectedTypes", "5");
-    url.searchParams.set("userInput", userInput);
-
-    const res = await fetch(url.toString(), {
-      headers: {
-        Accept: "application/json"
-      },
-      cache: "no-store"
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("TOM API error:", res.status, text.slice(0, 300));
-      return [];
-    }
-
-    const data = (await res.json()) as TomSearchResponse;
-    const items = data.projects?.items || [];
-
-    console.log(
-      `TOM query "${userInput || "(broad fallback)"}" ->`,
-      items.map((item) => item.projectName || item.challengeName)
-    );
-
-    return items.map(buildTomCandidate);
-  } catch (error) {
-    console.error("TOM fetch failed for query:", userInput, error);
+    console.error("TOM query expansion failed, using heuristics only", error);
     return [];
   }
 }
 
-function buildTomCandidate(project: TomProject): CandidateProject {
-  const title =
-    project.projectName ||
-    project.challengeName ||
-    project.additionalInformation?.teamName ||
-    "Untitled TOM project";
+type TomSolutionRecord = {
+  name: string;
+  link: string;
+  summary: string;
+  who: string;
+  why: string;
+  how: string;
+  what: string;
+  category: string;
+  tags: string;
+};
 
-  const url = `https://tomglobal.org/project?id=${project._id}`;
+function rowsToRecords(rows: string[][]): TomSolutionRecord[] {
+  if (rows.length < 2) return [];
 
-  const image =
-    project.imagesUrls?.[0] ||
-    project.additionalInformation?.challengeImage ||
-    project.thumbnailImageUrl ||
-    undefined;
+  const [header, ...dataRows] = rows;
+  const indexOf = (name: string) =>
+    header.findIndex((cell) => cell.trim().toLowerCase() === name.toLowerCase());
+
+  const columns = {
+    name: indexOf("Solution Name"),
+    link: indexOf("Link"),
+    summary: indexOf("Summary"),
+    who: indexOf("Who"),
+    why: indexOf("Why"),
+    how: indexOf("How"),
+    what: indexOf("What"),
+    category: indexOf("Category"),
+    tags: indexOf("Tags")
+  };
+
+  const cell = (row: string[], index: number) =>
+    index >= 0 ? (row[index] || "").trim() : "";
+
+  return dataRows
+    .filter((row) => row.length > 1)
+    .map((row) => ({
+      name: cell(row, columns.name),
+      link: cell(row, columns.link),
+      summary: cell(row, columns.summary),
+      who: cell(row, columns.who),
+      why: cell(row, columns.why),
+      how: cell(row, columns.how),
+      what: cell(row, columns.what),
+      category: cell(row, columns.category),
+      tags: cell(row, columns.tags)
+    }))
+    .filter((record) => record.name && record.link);
+}
+
+function buildTomCandidateFromRecord(
+  record: TomSolutionRecord
+): CandidateProject | null {
+  const id = extractProjectId(record.link) || stableId(record.link);
+  if (!id) return null;
 
   const rawText = [
-    title,
-    project.challengeName,
-    project.description,
-    project.additionalInformation?.disabledPersonDetails,
-    project.additionalInformation?.challengeDetails,
-    project.additionalInformation?.teamRequirements,
-    project.technicalRequirements?.length
-      ? `Technical requirements: ${project.technicalRequirements.join(", ")}`
-      : "",
-    project.downloadLink ? `Download link: ${project.downloadLink}` : "",
-    stripHtml(project.resources || "")
+    record.name,
+    record.summary,
+    record.who ? `Who: ${record.who}` : "",
+    record.why ? `Why: ${record.why}` : "",
+    record.how ? `How: ${record.how}` : "",
+    record.what ? `What: ${record.what}` : "",
+    record.category ? `Category: ${record.category}` : "",
+    record.tags ? `Tags: ${record.tags}` : ""
   ]
     .filter(Boolean)
     .join("\n\n");
 
   return {
-    id: project._id,
-    title,
-    url,
+    id,
+    title: record.name,
+    url: record.link,
     source: "tomglobal.org",
     sourceType: "TOM project",
-    image,
-    summary:
-      project.description ||
-      project.additionalInformation?.challengeDetails ||
-      trimText(rawText, 420),
+    image: undefined,
+    summary: record.summary || trimText(rawText, 420),
     rawText,
     evaluation: emptyCandidateEvaluation()
   };
 }
 
-function mergeTomCandidates(
-  primary: CandidateProject[],
-  fallback: CandidateProject[]
-) {
-  const seen = new Set<string>();
-  const merged: CandidateProject[] = [];
-
-  for (const candidate of [...primary, ...fallback]) {
-    if (seen.has(candidate.id)) continue;
-    seen.add(candidate.id);
-    merged.push(candidate);
+function extractProjectId(url: string): string | null {
+  try {
+    return new URL(url).searchParams.get("id");
+  } catch {
+    return null;
   }
-
-  return merged;
 }
 
-function stripHtml(html: string) {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
+// Minimal RFC 4180 CSV parser: handles quoted fields, embedded commas,
+// embedded newlines, and "" escaped quotes. Good enough for a static export
+// we control; not meant as a general-purpose CSV library.
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+
+    if (char === ",") {
+      row.push(field);
+      field = "";
+      continue;
+    }
+
+    if (char === "\r") continue;
+
+    if (char === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+
+    field += char;
+  }
+
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function stableId(value: string) {
+  let hash = 0;
+
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+
+  return `tom-${Math.abs(hash)}`;
 }
 
 function trimText(text: string, maxLength: number) {
