@@ -212,6 +212,17 @@ a {
   max-height: 58vh;
   overflow: auto;
   padding: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.chatMessages::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chatMessages::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 8px;
 }
 
 .message {
@@ -266,6 +277,17 @@ a {
   border-radius: 18px;
   padding: 12px 14px;
   outline: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.chatInputBar textarea::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chatInputBar textarea::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 8px;
 }
 
 .handoffBar {
@@ -289,6 +311,12 @@ a {
 .workspace {
   min-height: 100vh;
   padding: 24px;
+}
+
+.headerNeedCheckActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .workspaceHeader {
