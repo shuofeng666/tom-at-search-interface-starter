@@ -16,3 +16,22 @@ The first screen only shows an intake prompt. Internal evaluation and project ca
 npm install
 cp .env.example .env.local
 npm run dev
+```
+
+## TOM project catalog
+
+TOM project search reads `data/tom-solutions.csv` directly — no live API or
+API key involved. It's parsed once, cached in memory, and every row is
+scored locally against the intake need profile, so TOM results are reliable
+and don't depend on an external endpoint being up or guessing the right
+keyword.
+
+Expected columns:
+
+```text
+Solution Name, Link, Summary, Who, Why, How, What, Category, Tags
+```
+
+This is a snapshot, not a live feed: new TOM projects won't show up in
+search until this file is refreshed. To update it, ask TOM for a fresh
+export in the same column format and replace `data/tom-solutions.csv`.
