@@ -9,6 +9,15 @@ import {
   ReviewSummary,
 } from "@/lib/types";
 import { emptyNeedProfile } from "@/lib/types";
+import {
+  SearchHistoryEntry,
+  deleteSearchHistoryEntry,
+  loadSavedProjects,
+  loadSearchHistory,
+  removeSavedProject,
+  saveProjectGlobally,
+  upsertSearchHistory,
+} from "@/lib/clientStorage";
 
 type Stage = "intake" | "review" | "output";
 
@@ -20,6 +29,13 @@ type SearchPoolResponse = {
 };
 
 const PAGE_SIZE = 8;
+
+function createId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 const MIN_VISIBLE_SCORE = 1;
 const MIN_VISIBLE_TOM_SCORE = 1;
@@ -221,6 +237,59 @@ export default function Home() {
     null,
   );
 
+  const [sessionId] = useState(() => createId());
+  const [historyEntries, setHistoryEntries] = useState<SearchHistoryEntry[]>(
+    [],
+  );
+  const [savedProjects, setSavedProjects] = useState<CandidateProject[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
+
+  useEffect(() => {
+    setHistoryEntries(loadSearchHistory());
+    setSavedProjects(loadSavedProjects());
+  }, []);
+
+  function persistHistory(
+    nextCandidates: CandidateProject[],
+    nextPool: CandidateProject[],
+    nextPoolCursor: number,
+    nextSelectedForComparison: string[],
+    nextQuery: string = query,
+  ) {
+    setHistoryEntries(
+      upsertSearchHistory({
+        id: sessionId,
+        needProfile,
+        messages,
+        query: nextQuery,
+        candidates: nextCandidates,
+        pool: nextPool,
+        poolCursor: nextPoolCursor,
+        selectedForComparison: nextSelectedForComparison,
+      }),
+    );
+  }
+
+  function restoreFromHistory(entry: SearchHistoryEntry) {
+    setNeedProfile(entry.needProfile);
+    setMessages(entry.messages);
+    setQuery(entry.query);
+    setCandidates(entry.candidates);
+    setPool(entry.pool);
+    setPoolCursor(entry.poolCursor);
+    setSelectedForComparison(entry.selectedForComparison);
+    setSelectedCandidateId(entry.candidates[0]?.id || null);
+    setReview(null);
+    setReadyForSearch(true);
+    setStage("review");
+    setHistoryOpen(false);
+  }
+
+  function removeHistoryEntry(id: string) {
+    setHistoryEntries(deleteSearchHistoryEntry(id));
+  }
+
   const savedCandidates = useMemo(
     () =>
       candidates.filter((candidate) =>
@@ -366,6 +435,13 @@ export default function Home() {
       setCandidates(visibleScored);
       setPoolCursor(firstBatch.length);
       setSelectedCandidateId(visibleScored[0]?.id || null);
+      persistHistory(
+        visibleScored,
+        fetchedPool,
+        firstBatch.length,
+        [],
+        searchData.query,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Search failed.";
       setError(message);
@@ -386,13 +462,22 @@ export default function Home() {
 
     try {
       const nextBatch = pool.slice(poolCursor, poolCursor + PAGE_SIZE);
-const scored = await scoreBatch(nextBatch);
-const visibleScored = prepareVisibleCandidates(scored);
+      const scored = await scoreBatch(nextBatch);
+      const visibleScored = prepareVisibleCandidates(scored);
+      const mergedCandidates = sortDisplayCandidates([
+        ...candidates,
+        ...visibleScored,
+      ]);
+      const nextPoolCursor = poolCursor + nextBatch.length;
 
-setCandidates((previous) =>
-  sortDisplayCandidates([...previous, ...visibleScored])
-);
-      setPoolCursor((previous) => previous + nextBatch.length);
+      setCandidates(mergedCandidates);
+      setPoolCursor(nextPoolCursor);
+      persistHistory(
+        mergedCandidates,
+        pool,
+        nextPoolCursor,
+        selectedForComparison,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Load more failed.";
       setError(message);
@@ -422,20 +507,21 @@ setCandidates((previous) =>
       const updated = (await res.json()) as NeedProfile;
       setNeedProfile(updated);
 
-      setCandidates((previous) =>
-        previous.map((item) =>
-          item.id === candidate.id
-            ? {
-                ...item,
-                rejected: true,
-                rejectionReason:
-                  rejectionOptions.find(
-                    (option) => option.value === rejectionReason,
-                  )?.label || rejectionReason,
-              }
-            : item,
-        ),
+      const updatedCandidates = candidates.map((item) =>
+        item.id === candidate.id
+          ? {
+              ...item,
+              rejected: true,
+              rejectionReason:
+                rejectionOptions.find(
+                  (option) => option.value === rejectionReason,
+                )?.label || rejectionReason,
+            }
+          : item,
       );
+
+      setCandidates(updatedCandidates);
+      persistHistory(updatedCandidates, pool, poolCursor, selectedForComparison);
     } finally {
       setLoading(null);
     }
@@ -462,12 +548,23 @@ setCandidates((previous) =>
     }
   }
 
-  function toggleComparison(id: string) {
-    setSelectedForComparison((previous) =>
-      previous.includes(id)
-        ? previous.filter((candidateId) => candidateId !== id)
-        : [...previous, id],
+  // "Save" does double duty: it marks the candidate for this session's
+  // comparison table AND persists it to the global saved-projects list, so
+  // it's still findable after "New search" wipes the session.
+  function toggleComparison(candidate: CandidateProject) {
+    const isSelected = selectedForComparison.includes(candidate.id);
+
+    const nextSelected = isSelected
+      ? selectedForComparison.filter((id) => id !== candidate.id)
+      : [...selectedForComparison, candidate.id];
+
+    setSelectedForComparison(nextSelected);
+    setSavedProjects(
+      isSelected
+        ? removeSavedProject(candidate.id)
+        : saveProjectGlobally(candidate),
     );
+    persistHistory(candidates, pool, poolCursor, nextSelected);
   }
 
   return (
@@ -489,6 +586,10 @@ setCandidates((previous) =>
           needProfile={needProfile}
           missingInformation={missingInformation}
           onStartSearch={() => startSearch()}
+          historyCount={historyEntries.length}
+          savedCount={savedProjects.length}
+          onOpenHistory={() => setHistoryOpen(true)}
+          onOpenSaved={() => setSavedOpen(true)}
         />
       )}
 
@@ -509,6 +610,10 @@ setCandidates((previous) =>
           loadingMore={loadingMore}
           generateReviewSummary={generateReviewSummary}
           onBackToIntake={() => setStage("intake")}
+          historyCount={historyEntries.length}
+          savedCount={savedProjects.length}
+          onOpenHistory={() => setHistoryOpen(true)}
+          onOpenSaved={() => setSavedOpen(true)}
         />
       )}
 
@@ -519,6 +624,28 @@ setCandidates((previous) =>
           candidates={candidates}
           savedCandidates={savedCandidates}
           onBackToReview={() => setStage("review")}
+        />
+      )}
+
+      {historyOpen && (
+        <HistoryPanel
+          entries={historyEntries}
+          onSelect={restoreFromHistory}
+          onDelete={removeHistoryEntry}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+
+      {savedOpen && (
+        <SavedProjectsPanel
+          projects={savedProjects}
+          onRemove={(id) => {
+            setSavedProjects(removeSavedProject(id));
+            setSelectedForComparison((previous) =>
+              previous.filter((candidateId) => candidateId !== id),
+            );
+          }}
+          onClose={() => setSavedOpen(false)}
         />
       )}
     </main>
@@ -545,6 +672,10 @@ function IntakeScreen({
   needProfile,
   missingInformation,
   onStartSearch,
+  historyCount,
+  savedCount,
+  onOpenHistory,
+  onOpenSaved,
 }: {
   messages: ChatMessage[];
   draft: string;
@@ -556,6 +687,10 @@ function IntakeScreen({
   needProfile: NeedProfile;
   missingInformation: string[];
   onStartSearch: () => void;
+  historyCount: number;
+  savedCount: number;
+  onOpenHistory: () => void;
+  onOpenSaved: () => void;
 }) {
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -580,7 +715,24 @@ function IntakeScreen({
     return (
       <section className="landing">
         <div className="promptShell">
-          <div className="promptLabel">TOM</div>
+          <div className="promptLabelRow">
+            <div className="promptLabel">TOM</div>
+
+            {(historyCount > 0 || savedCount > 0) && (
+              <div className="promptLabelActions">
+                {historyCount > 0 && (
+                  <button className="plainBtn" onClick={onOpenHistory}>
+                    History ({historyCount})
+                  </button>
+                )}
+                {savedCount > 0 && (
+                  <button className="plainBtn" onClick={onOpenSaved}>
+                    Saved ({savedCount})
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
           <form className="heroPrompt" onSubmit={handleSubmit}>
             <textarea
@@ -607,6 +759,14 @@ function IntakeScreen({
         <button className="plainBtn" onClick={() => location.reload()}>
           New search
         </button>
+        <div className="miniHeaderActions">
+          <button className="plainBtn" onClick={onOpenHistory}>
+            History ({historyCount})
+          </button>
+          <button className="plainBtn" onClick={onOpenSaved}>
+            Saved ({savedCount})
+          </button>
+        </div>
         <span>TOM</span>
       </div>
 
@@ -680,6 +840,10 @@ function ReviewScreen({
   loadingMore,
   generateReviewSummary,
   onBackToIntake,
+  historyCount,
+  savedCount,
+  onOpenHistory,
+  onOpenSaved,
 }: {
   needProfile: NeedProfile;
   candidates: CandidateProject[];
@@ -688,7 +852,7 @@ function ReviewScreen({
   savedCandidates: CandidateProject[];
   query: string;
   setSelectedCandidateId: (id: string) => void;
-  toggleComparison: (id: string) => void;
+  toggleComparison: (candidate: CandidateProject) => void;
   rejectCandidate: (
     candidate: CandidateProject,
     rejectionReason: string,
@@ -699,6 +863,10 @@ function ReviewScreen({
   loadingMore: boolean;
   generateReviewSummary: () => void;
   onBackToIntake: () => void;
+  historyCount: number;
+  savedCount: number;
+  onOpenHistory: () => void;
+  onOpenSaved: () => void;
 }) {
   const tomCandidates = candidates.filter(isTomCandidate);
   const externalCandidates = candidates.filter(
@@ -734,6 +902,12 @@ function ReviewScreen({
             </button>
             <button className="plainBtn" onClick={() => location.reload()}>
               New search
+            </button>
+            <button className="plainBtn" onClick={onOpenHistory}>
+              History ({historyCount})
+            </button>
+            <button className="plainBtn" onClick={onOpenSaved}>
+              Saved ({savedCount})
             </button>
           </div>
         </div>
@@ -783,7 +957,7 @@ function ReviewScreen({
                       active={candidate.id === selectedCandidate?.id}
                       selected={selectedForComparison.includes(candidate.id)}
                       onSelect={() => setSelectedCandidateId(candidate.id)}
-                      onToggleComparison={() => toggleComparison(candidate.id)}
+                      onToggleComparison={() => toggleComparison(candidate)}
                     />
                   ))
                 ) : (
@@ -805,7 +979,7 @@ function ReviewScreen({
                       active={candidate.id === selectedCandidate?.id}
                       selected={selectedForComparison.includes(candidate.id)}
                       onSelect={() => setSelectedCandidateId(candidate.id)}
-                      onToggleComparison={() => toggleComparison(candidate.id)}
+                      onToggleComparison={() => toggleComparison(candidate)}
                     />
                   ))
                 ) : (
@@ -833,7 +1007,7 @@ function ReviewScreen({
             <CandidateDetail
               candidate={selectedCandidate}
               selected={selectedForComparison.includes(selectedCandidate.id)}
-              onToggleComparison={() => toggleComparison(selectedCandidate.id)}
+              onToggleComparison={() => toggleComparison(selectedCandidate)}
               onReject={(reason) => rejectCandidate(selectedCandidate, reason)}
             />
           ) : (
@@ -849,6 +1023,110 @@ function ReviewScreen({
         </aside>
       </div>
     </section>
+  );
+}
+
+function HistoryPanel({
+  entries,
+  onSelect,
+  onDelete,
+  onClose,
+}: {
+  entries: SearchHistoryEntry[];
+  onSelect: (entry: SearchHistoryEntry) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="overlayBackdrop" onClick={onClose}>
+      <div
+        className="overlayPanel"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="overlayHeader">
+          <h2>Search history</h2>
+          <button className="plainBtn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        {entries.length === 0 ? (
+          <p className="small">
+            No past searches yet. They'll show up here once you run one.
+          </p>
+        ) : (
+          <div className="historyList">
+            {entries.map((entry) => (
+              <div key={entry.id} className="historyRow">
+                <button
+                  className="historyRowMain"
+                  onClick={() => onSelect(entry)}
+                >
+                  <span className="historyRowLabel">{entry.label}</span>
+                  <span className="historyRowMeta">
+                    {new Date(entry.createdAt).toLocaleString()} ·{" "}
+                    {entry.candidates.length} result
+                    {entry.candidates.length === 1 ? "" : "s"}
+                  </span>
+                </button>
+                <button
+                  className="plainBtn danger"
+                  onClick={() => onDelete(entry.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SavedProjectsPanel({
+  projects,
+  onRemove,
+  onClose,
+}: {
+  projects: CandidateProject[];
+  onRemove: (id: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="overlayBackdrop" onClick={onClose}>
+      <div
+        className="overlayPanel"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="overlayHeader">
+          <h2>Saved projects</h2>
+          <button className="plainBtn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        {projects.length === 0 ? (
+          <p className="small">
+            No saved projects yet. Tap "Save" on any result to keep it here
+            across searches.
+          </p>
+        ) : (
+          <div className="candidateList">
+            {projects.map((candidate) => (
+              <CandidateRow
+                key={candidate.id}
+                candidate={candidate}
+                active={false}
+                selected
+                onSelect={() => {}}
+                onToggleComparison={() => onRemove(candidate.id)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1419,6 +1697,18 @@ function InterfaceOverrides() {
         padding-left: 8px;
       }
 
+      .promptLabelRow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .promptLabelActions {
+        display: flex;
+        gap: 8px;
+      }
+
       .heroPrompt {
         width: 100%;
         min-height: 220px;
@@ -1472,6 +1762,11 @@ function InterfaceOverrides() {
         align-items: center;
         justify-content: space-between;
         color: var(--muted);
+      }
+
+      .miniHeaderActions {
+        display: flex;
+        gap: 8px;
       }
 
       .chatWindow {
