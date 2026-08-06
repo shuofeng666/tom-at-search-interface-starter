@@ -50,6 +50,24 @@ function isTomCandidate(candidate: CandidateProject) {
   );
 }
 
+function splitCategories(category?: string): string[] {
+  if (!category) return [];
+  return category
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function sortCandidateList(
+  list: CandidateProject[],
+  mode: "best" | "az",
+): CandidateProject[] {
+  if (mode === "az") {
+    return [...list].sort((a, b) => a.title.localeCompare(b.title));
+  }
+  return list;
+}
+
 function evaluationText(candidate: CandidateProject) {
   return [
     candidate.evaluation?.needFit?.explanation,
@@ -881,6 +899,39 @@ function ReviewScreen({
     (candidate) => !isTomCandidate(candidate),
   );
 
+  const [sortMode, setSortMode] = useState<"best" | "az">("best");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [sourceTypeFilter, setSourceTypeFilter] = useState("all");
+
+  const tomCategories = useMemo(
+    () =>
+      Array.from(
+        new Set(tomCandidates.flatMap((c) => splitCategories(c.category))),
+      ).sort(),
+    [tomCandidates],
+  );
+
+  const externalSourceTypes = useMemo(
+    () => Array.from(new Set(externalCandidates.map((c) => c.sourceType))).sort(),
+    [externalCandidates],
+  );
+
+  const visibleTomCandidates = sortCandidateList(
+    categoryFilter === "all"
+      ? tomCandidates
+      : tomCandidates.filter((c) =>
+          splitCategories(c.category).includes(categoryFilter),
+        ),
+    sortMode,
+  );
+
+  const visibleExternalCandidates = sortCandidateList(
+    sourceTypeFilter === "all"
+      ? externalCandidates
+      : externalCandidates.filter((c) => c.sourceType === sourceTypeFilter),
+    sortMode,
+  );
+
   return (
     <section className="workspace">
       <header className="workspaceHeader">
@@ -953,6 +1004,55 @@ function ReviewScreen({
             card for details.
           </p>
 
+          <div className="resultsControls">
+            <label className="resultsControl">
+              Sort
+              <select
+                value={sortMode}
+                onChange={(event) =>
+                  setSortMode(event.target.value as "best" | "az")
+                }
+              >
+                <option value="best">Best match</option>
+                <option value="az">Title A–Z</option>
+              </select>
+            </label>
+
+            {tomCategories.length > 0 && (
+              <label className="resultsControl">
+                TOM category
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                >
+                  <option value="all">All categories</option>
+                  {tomCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            {externalSourceTypes.length > 0 && (
+              <label className="resultsControl">
+                Other source type
+                <select
+                  value={sourceTypeFilter}
+                  onChange={(event) => setSourceTypeFilter(event.target.value)}
+                >
+                  <option value="all">All types</option>
+                  {externalSourceTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+
           <div className="resultsColumns">
             <div className="resultsColumn">
               <h3 className="resultsColumnTitle">
@@ -964,8 +1064,8 @@ function ReviewScreen({
                 )}
               </h3>
               <div className="candidateList">
-                {tomCandidates.length ? (
-                  tomCandidates.map((candidate) => (
+                {visibleTomCandidates.length ? (
+                  visibleTomCandidates.map((candidate) => (
                     <CandidateRow
                       key={candidate.id}
                       candidate={candidate}
@@ -977,7 +1077,9 @@ function ReviewScreen({
                   ))
                 ) : (
                   <p className="small resultsEmpty">
-                    No TOM projects matched yet.
+                    {tomCandidates.length
+                      ? "No TOM projects match this filter."
+                      : "No TOM projects matched yet."}
                   </p>
                 )}
               </div>
@@ -986,8 +1088,8 @@ function ReviewScreen({
             <div className="resultsColumn">
               <h3 className="resultsColumnTitle">Other related work</h3>
               <div className="candidateList">
-                {externalCandidates.length ? (
-                  externalCandidates.map((candidate) => (
+                {visibleExternalCandidates.length ? (
+                  visibleExternalCandidates.map((candidate) => (
                     <CandidateRow
                       key={candidate.id}
                       candidate={candidate}
@@ -999,7 +1101,9 @@ function ReviewScreen({
                   ))
                 ) : (
                   <p className="small resultsEmpty">
-                    No other related work matched yet.
+                    {externalCandidates.length
+                      ? "No other related work matches this filter."
+                      : "No other related work matched yet."}
                   </p>
                 )}
               </div>

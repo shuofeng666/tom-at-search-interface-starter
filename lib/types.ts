@@ -111,6 +111,7 @@ export type CandidateProject = {
   image?: string;
   summary: string;
   rawText?: string;
+  category?: string;
   evaluation: CandidateEvaluation;
   saved?: boolean;
   rejected?: boolean;

@@ -406,6 +406,7 @@ function buildTomCandidateFromRecord(
     image: undefined,
     summary: record.summary || trimText(rawText, 420),
     rawText,
+    category: record.category || undefined,
     evaluation: emptyCandidateEvaluation()
   };
 }
