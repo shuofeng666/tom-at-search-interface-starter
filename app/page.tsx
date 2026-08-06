@@ -87,6 +87,22 @@ function needsTomTeamLabel(candidate: CandidateProject) {
 const TOM_CONTACT_EMAIL =
   process.env.NEXT_PUBLIC_TOM_CONTACT_EMAIL || "help@tomglobal.org";
 
+function buildNeedSummaryLines(needProfile: NeedProfile): string[] {
+  const location = [needProfile.location?.cityOrRegion, needProfile.location?.country]
+    .filter(Boolean)
+    .join(", ");
+
+  return [
+    `Need: ${needProfile.activity}`,
+    `Problem: ${needProfile.problem}`,
+    `Desired outcome: ${needProfile.desiredOutcome}`,
+    [needProfile.userAge, needProfile.seekerRole].filter(Boolean).length
+      ? `Age / role: ${[needProfile.userAge, needProfile.seekerRole].filter(Boolean).join(" / ")}`
+      : "",
+    location ? `Location: ${location}` : "",
+  ].filter((line) => line !== "");
+}
+
 function buildTomTeamRequestMailto(
   candidate: CandidateProject,
   needProfile: NeedProfile,
@@ -99,14 +115,27 @@ function buildTomTeamRequestMailto(
     `Project: ${candidate.title}`,
     `Link: ${candidate.url}`,
     ``,
-    `Need: ${needProfile.activity}`,
-    `Problem: ${needProfile.problem}`,
-    `Desired outcome: ${needProfile.desiredOutcome}`,
-    [needProfile.userAge, needProfile.seekerRole].filter(Boolean).length
-      ? `Age / role: ${[needProfile.userAge, needProfile.seekerRole].filter(Boolean).join(" / ")}`
-      : "",
+    ...buildNeedSummaryLines(needProfile),
     ``,
     `Why this needs TOM: ${candidate.evaluation?.pathwayReason || "See fit assessment on the project page."}`,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+
+  const params = new URLSearchParams({ subject, body });
+  return `mailto:${TOM_CONTACT_EMAIL}?${params.toString()}`;
+}
+
+function buildNoMatchRequestMailto(needProfile: NeedProfile, query: string) {
+  const subject = `TOM team help needed: no existing solution found`;
+
+  const body = [
+    `A search did not turn up a strong existing match — this may be a good`,
+    `candidate for TOM to look into directly, or a possible new TOM challenge.`,
+    ``,
+    ...buildNeedSummaryLines(needProfile),
+    ``,
+    query ? `Search terms used: ${query}` : "",
   ]
     .filter((line) => line !== "")
     .join("\n");
@@ -1074,6 +1103,21 @@ function ReviewScreen({
             TOM projects on the left, other related work on the right. Tap a
             card for details.
           </p>
+
+          {tomCandidates.length === 0 && externalCandidates.length === 0 && (
+            <div className="noMatchBanner">
+              <p>
+                No strong matches yet for this need — this could be a good
+                candidate for TOM to look into directly.
+              </p>
+              <a
+                className="requestHelpBtn"
+                href={buildNoMatchRequestMailto(needProfile, query)}
+              >
+                Request TOM team help ✉
+              </a>
+            </div>
+          )}
 
           <div className="resultsControls">
             <label className="resultsControl">
