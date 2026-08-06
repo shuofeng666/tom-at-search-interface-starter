@@ -34,4 +34,6 @@ Solution Name, Link, Summary, Who, Why, How, What, Category, Tags
 
 This is a snapshot, not a live feed: new TOM projects won't show up in
 search until this file is refreshed. To update it, ask TOM for a fresh
-export in the same column format and replace `data/tom-solutions.csv`.
+export in the same column format, replace `data/tom-solutions.csv`, and
+update the date in `data/tom-solutions.meta.json` — the results page shows
+that date next to the TOM results so staff know how fresh the data is.

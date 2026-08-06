@@ -16,8 +16,45 @@ import { generateGeminiJson, toStringArray } from "./gemini";
 // (data/tom-solutions.csv) that we load once and score entirely locally —
 // no network calls, no guessing, no missed pages.
 const CSV_PATH = path.join(process.cwd(), "data", "tom-solutions.csv");
+const CSV_META_PATH = path.join(
+  process.cwd(),
+  "data",
+  "tom-solutions.meta.json"
+);
 
 let catalogCache: CandidateProject[] | null = null;
+let snapshotDateCache: string | null | undefined;
+
+// The date TOM exported data/tom-solutions.csv, so the UI can be upfront
+// that this is a snapshot, not a live feed. Update data/tom-solutions.meta.json
+// whenever the CSV is refreshed; falls back to the CSV file's own mtime if
+// that metadata file is missing.
+export function getTomCatalogSnapshotDate(): string | null {
+  if (snapshotDateCache !== undefined) return snapshotDateCache;
+
+  try {
+    const raw = fs.readFileSync(CSV_META_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as { snapshotDate?: string };
+
+    if (parsed.snapshotDate) {
+      snapshotDateCache = parsed.snapshotDate;
+      return snapshotDateCache;
+    }
+  } catch {
+    // fall through to mtime
+  }
+
+  try {
+    snapshotDateCache = fs
+      .statSync(CSV_PATH)
+      .mtime.toISOString()
+      .slice(0, 10);
+  } catch {
+    snapshotDateCache = null;
+  }
+
+  return snapshotDateCache;
+}
 
 export async function searchTomProjects({
   needProfile,

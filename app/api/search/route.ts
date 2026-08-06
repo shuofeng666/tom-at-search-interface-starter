@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildSearchQuery, fetchPrioritizedPool } from "@/lib/exa";
 import { buildCandidatesFromExa } from "@/lib/evaluate";
-import { searchTomProjects } from "@/lib/tom";
+import { getTomCatalogSnapshotDate, searchTomProjects } from "@/lib/tom";
 import { CandidateProject, NeedProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -23,6 +23,7 @@ const TOM_FIRST_PAGE_SLOTS = 4;
 export type SearchPoolResponse = {
   query: string;
   pool: CandidateProject[];
+  tomCatalogSnapshotDate: string | null;
 };
 
 export async function POST(req: NextRequest) {
@@ -75,7 +76,11 @@ export async function POST(req: NextRequest) {
       total: pool.length
     });
 
-    return NextResponse.json({ query, pool } satisfies SearchPoolResponse);
+    return NextResponse.json({
+      query,
+      pool,
+      tomCatalogSnapshotDate: getTomCatalogSnapshotDate()
+    } satisfies SearchPoolResponse);
   } catch (error) {
     console.error("search route error", error);
 

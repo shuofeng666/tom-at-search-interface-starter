@@ -14,12 +14,15 @@ const nextConfig = {
   turbopack: {
     root: projectRoot,
   },
-  // /api/search reads data/tom-solutions.csv via fs at runtime. Next's
-  // automatic file tracing can't see through the dynamic path.join() used to
-  // build that path, so without this it can silently get dropped from a
-  // production serverless bundle.
+  // /api/search reads data/tom-solutions.csv (and its .meta.json) via fs at
+  // runtime. Next's automatic file tracing can't see through the dynamic
+  // path.join() used to build that path, so without this it can silently
+  // get dropped from a production serverless bundle.
   outputFileTracingIncludes: {
-    "/api/search": ["./data/tom-solutions.csv"],
+    "/api/search": [
+      "./data/tom-solutions.csv",
+      "./data/tom-solutions.meta.json",
+    ],
   },
 };
 

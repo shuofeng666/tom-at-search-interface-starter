@@ -26,6 +26,7 @@ type Stage = "intake" | "review" | "output";
 type SearchPoolResponse = {
   query: string;
   pool: CandidateProject[];
+  tomCatalogSnapshotDate: string | null;
 };
 
 const PAGE_SIZE = 8;
@@ -229,6 +230,9 @@ export default function Home() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [review, setReview] = useState<ReviewSummary | null>(null);
   const [query, setQuery] = useState<string>("");
+  const [tomCatalogSnapshotDate, setTomCatalogSnapshotDate] = useState<
+    string | null
+  >(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [selectedForComparison, setSelectedForComparison] = useState<string[]>(
     [],
@@ -414,6 +418,7 @@ export default function Home() {
 
       const searchData = data as SearchPoolResponse;
       setQuery(searchData.query);
+      setTomCatalogSnapshotDate(searchData.tomCatalogSnapshotDate || null);
 
       const fetchedPool = searchData.pool || [];
       setPool(fetchedPool);
@@ -614,6 +619,7 @@ export default function Home() {
           savedCount={savedProjects.length}
           onOpenHistory={() => setHistoryOpen(true)}
           onOpenSaved={() => setSavedOpen(true)}
+          tomCatalogSnapshotDate={tomCatalogSnapshotDate}
         />
       )}
 
@@ -844,6 +850,7 @@ function ReviewScreen({
   savedCount,
   onOpenHistory,
   onOpenSaved,
+  tomCatalogSnapshotDate,
 }: {
   needProfile: NeedProfile;
   candidates: CandidateProject[];
@@ -860,6 +867,7 @@ function ReviewScreen({
   runSearch: (query?: string) => void;
   loadMore: () => void;
   canLoadMore: boolean;
+  tomCatalogSnapshotDate?: string | null;
   loadingMore: boolean;
   generateReviewSummary: () => void;
   onBackToIntake: () => void;
@@ -947,7 +955,14 @@ function ReviewScreen({
 
           <div className="resultsColumns">
             <div className="resultsColumn">
-              <h3 className="resultsColumnTitle">TOM projects</h3>
+              <h3 className="resultsColumnTitle">
+                TOM projects
+                {tomCatalogSnapshotDate && (
+                  <span className="snapshotBadge">
+                    catalog snapshot: {tomCatalogSnapshotDate}
+                  </span>
+                )}
+              </h3>
               <div className="candidateList">
                 {tomCandidates.length ? (
                   tomCandidates.map((candidate) => (
