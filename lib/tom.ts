@@ -77,15 +77,21 @@ export async function searchTomProjects({
   const keywords = buildLocalMatchTerms(needProfile);
 
   const ranked = rankTomCandidatesByNeed(catalog, keywords, expandedTerms);
+  const topCandidates = ranked.slice(0, limit);
+
+  // Only fetch photos for the handful of candidates we're actually about to
+  // show (not the whole catalog) — see attachTomImages for why.
+  const withImages = await attachTomImages(topCandidates);
 
   console.log("TOM catalog match", {
     catalogSize: catalog.length,
     expandedTerms,
     keywords,
-    top: ranked.slice(0, limit).map((candidate) => candidate.title)
+    top: withImages.map((candidate) => candidate.title),
+    withImages: withImages.filter((candidate) => candidate.image).length
   });
 
-  return ranked.slice(0, limit);
+  return withImages;
 }
 
 async function getTomCatalog(): Promise<CandidateProject[]> {
@@ -98,21 +104,11 @@ async function getTomCatalog(): Promise<CandidateProject[]> {
       const rows = parseCsv(raw);
       const records = rowsToRecords(rows);
 
-      // The CSV export has no image columns, but TOM's own project data does
-      // (imagesUrls / thumbnailImageUrl) — fetch that separately, purely to
-      // enrich cards with real photos. This does not affect search/ranking
-      // at all (that's CSV-only, see searchTomProjects above); it's a no-op
-      // if TOM_SEARCH_API_URL isn't configured.
-      const imageMap = await getTomImageMap();
-
       const items = records
-        .map((record) => buildTomCandidateFromRecord(record, imageMap))
+        .map(buildTomCandidateFromRecord)
         .filter((candidate): candidate is CandidateProject => candidate !== null);
 
-      console.log("TOM catalog loaded", {
-        rows: items.length,
-        withImages: items.filter((c) => c.image).length
-      });
+      console.log("TOM catalog loaded", { rows: items.length });
 
       catalogCache = items;
       return items;
@@ -139,123 +135,113 @@ type TomImageProject = {
 
 type TomImageSearchResponse = {
   projects?: {
-    totalNumberOfPages?: number;
     items?: TomImageProject[];
   };
 };
 
-const IMAGE_PAGE_SIZE = 100;
-const IMAGE_MAX_PAGES = 10;
-const IMAGE_MAP_TTL_MS = 30 * 60 * 1000;
+const IMAGE_LOOKUP_TTL_MS = 30 * 60 * 1000;
+const IMAGE_FETCH_TIMEOUT_MS = 4000;
 
-// Every project's full photo set (usually 3-4 images), not just one
-// thumbnail — id -> ordered image URLs.
-let imageMapCache: Map<string, string[]> | null = null;
-let imageMapFetchedAt = 0;
-let imageMapFetchInFlight: Promise<Map<string, string[]>> | null = null;
+type ImageLookupEntry = { images: string[] | null; fetchedAt: number };
+const imageLookupCache = new Map<string, ImageLookupEntry>();
 
-async function getTomImageMap(): Promise<Map<string, string[]>> {
+// The CSV export has no image columns, but TOM's own project data does
+// (imagesUrls / thumbnailImageUrl). An earlier version of this fetched
+// TOM's ENTIRE catalog's images up front (paginating hundreds of items)
+// before a search could return anything — on a serverless function that
+// risks the platform timing the whole request out before it ever gets to
+// scoring, which silently drops images with no visible error. This instead
+// only looks up images for the ~20 candidates a search is actually about to
+// show, one small targeted request per candidate, run in parallel with a
+// short per-request timeout so one slow lookup can't stall the rest. A no-op
+// if TOM_SEARCH_API_URL isn't configured; never affects search/ranking,
+// which is CSV-only (see searchTomProjects above).
+async function attachTomImages(
+  candidates: CandidateProject[]
+): Promise<CandidateProject[]> {
   const endpoint = process.env.TOM_SEARCH_API_URL;
-  if (!endpoint) return new Map();
+  if (!endpoint) return candidates;
 
-  if (imageMapCache && Date.now() - imageMapFetchedAt < IMAGE_MAP_TTL_MS) {
-    return imageMapCache;
-  }
+  const results = await Promise.allSettled(
+    candidates.map((candidate) =>
+      getTomProjectImages(endpoint, candidate.id, candidate.title)
+    )
+  );
 
-  if (imageMapFetchInFlight) return imageMapFetchInFlight;
-
-  imageMapFetchInFlight = (async () => {
-    try {
-      const first = await fetchTomImagePage(endpoint, 0, IMAGE_PAGE_SIZE);
-      const pagesToFetch = Math.min(
-        Math.max(first.totalPages, 1),
-        IMAGE_MAX_PAGES
-      );
-
-      const restPages = await Promise.all(
-        Array.from({ length: Math.max(0, pagesToFetch - 1) }, (_, index) =>
-          fetchTomImagePage(
-            endpoint,
-            (index + 1) * IMAGE_PAGE_SIZE,
-            IMAGE_PAGE_SIZE
-          )
-        )
-      );
-
-      const map = new Map<string, string[]>();
-      for (const page of [first, ...restPages]) {
-        for (const project of page.items) {
-          if (!project._id) continue;
-
-          const images = Array.from(
-            new Set(
-              [
-                ...(project.imagesUrls || []),
-                project.additionalInformation?.challengeImage,
-                project.thumbnailImageUrl
-              ].filter((url): url is string => Boolean(url))
-            )
-          );
-
-          if (images.length) map.set(project._id, images);
-        }
-      }
-
-      console.log("TOM image map fetched", {
-        totalPages: first.totalPages,
-        pagesFetched: pagesToFetch,
-        projectsWithImages: map.size
-      });
-
-      imageMapCache = map;
-      imageMapFetchedAt = Date.now();
-      return map;
-    } catch (error) {
-      console.error(
-        "TOM image map fetch failed, continuing without TOM images",
-        error
-      );
-      return imageMapCache || new Map();
-    } finally {
-      imageMapFetchInFlight = null;
-    }
-  })();
-
-  return imageMapFetchInFlight;
+  return candidates.map((candidate, index) => {
+    const result = results[index];
+    const images = result.status === "fulfilled" ? result.value : null;
+    if (!images || !images.length) return candidate;
+    return { ...candidate, image: images[0], images };
+  });
 }
 
-async function fetchTomImagePage(
+async function getTomProjectImages(
   endpoint: string,
-  skip: number,
-  limit: number
-): Promise<{ items: TomImageProject[]; totalPages: number }> {
+  id: string,
+  title: string
+): Promise<string[] | null> {
+  const cached = imageLookupCache.get(id);
+  if (cached && Date.now() - cached.fetchedAt < IMAGE_LOOKUP_TTL_MS) {
+    return cached.images;
+  }
+
+  const images = await fetchTomProjectImages(endpoint, id, title);
+  imageLookupCache.set(id, { images, fetchedAt: Date.now() });
+  return images;
+}
+
+async function fetchTomProjectImages(
+  endpoint: string,
+  id: string,
+  title: string
+): Promise<string[] | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+
   try {
     const url = new URL(endpoint);
-    url.searchParams.set("skip", String(skip));
-    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("skip", "0");
+    url.searchParams.set("limit", "5");
     url.searchParams.set("selectedTypes", "5");
-    url.searchParams.set("userInput", "");
+    url.searchParams.set("userInput", title);
 
     const res = await fetch(url.toString(), {
       headers: { Accept: "application/json" },
-      cache: "no-store"
+      cache: "no-store",
+      signal: controller.signal
     });
 
     if (!res.ok) {
-      const text = await res.text();
-      console.error("TOM image API error:", res.status, text.slice(0, 300));
-      return { items: [], totalPages: 0 };
+      console.error("TOM image lookup API error:", res.status, title);
+      return null;
     }
 
     const data = (await res.json()) as TomImageSearchResponse;
+    const items = data.projects?.items || [];
 
-    return {
-      items: data.projects?.items || [],
-      totalPages: data.projects?.totalNumberOfPages || 0
-    };
+    // Only trust an exact id match — a keyword search on the title can
+    // return other projects too, and attaching the wrong project's photo
+    // to this one would be worse than no photo.
+    const match = items.find((item) => item._id === id);
+    if (!match) return null;
+
+    const images = Array.from(
+      new Set(
+        [
+          ...(match.imagesUrls || []),
+          match.additionalInformation?.challengeImage,
+          match.thumbnailImageUrl
+        ].filter((value): value is string => Boolean(value))
+      )
+    );
+
+    return images.length ? images : null;
   } catch (error) {
-    console.error("TOM image page fetch failed:", skip, error);
-    return { items: [], totalPages: 0 };
+    console.error("TOM image lookup failed for", title, error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -530,13 +516,10 @@ function rowsToRecords(rows: string[][]): TomSolutionRecord[] {
 }
 
 function buildTomCandidateFromRecord(
-  record: TomSolutionRecord,
-  imageMap: Map<string, string[]>
+  record: TomSolutionRecord
 ): CandidateProject | null {
   const id = extractProjectId(record.link) || stableId(record.link);
   if (!id) return null;
-
-  const images = imageMap.get(id);
 
   const rawText = [
     record.name,
@@ -557,8 +540,8 @@ function buildTomCandidateFromRecord(
     url: record.link,
     source: "tomglobal.org",
     sourceType: "TOM project",
-    image: images?.[0],
-    images,
+    image: undefined,
+    images: undefined,
     summary: record.summary || trimText(rawText, 420),
     rawText,
     category: record.category || undefined,
