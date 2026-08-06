@@ -974,23 +974,16 @@ function ReviewScreen({
         <div>
           <h1>Search review</h1>
           <p>
-            Check whether these projects match the need before preparing a
-            summary.
+            Check whether these projects match the need. Add a detail if
+            something feels off, before preparing a summary.
           </p>
         </div>
 
-        <div className="headerNeedCheck">
-          <div>
-            <p className="headerNeedCheckTitle">Does this match the need?</p>
-            <p className="headerNeedCheckText">
-              If the results feel off, add one more detail before summarizing.
-            </p>
-          </div>
-
-          <div className="headerNeedCheckActions">
-            <button className="sendBtn" onClick={onBackToIntake}>
-              Add more details
-            </button>
+        <div className="workspaceHeaderActions">
+          <button className="sendBtn" onClick={onBackToIntake}>
+            Add more details
+          </button>
+          <div className="workspaceHeaderSecondary">
             <button className="plainBtn" onClick={() => location.reload()}>
               New search
             </button>
@@ -1164,15 +1157,15 @@ function ReviewScreen({
           ) : (
             <p className="small">Select a candidate to inspect details.</p>
           )}
-
-          {savedCandidates.length > 0 && (
-            <>
-              <h3>Saved comparison</h3>
-              <ComparisonView candidates={savedCandidates} />
-            </>
-          )}
         </aside>
       </div>
+
+      {savedCandidates.length > 0 && (
+        <section className="panel comparisonPanel">
+          <h2>Saved comparison</h2>
+          <ComparisonView candidates={savedCandidates} />
+        </section>
+      )}
     </section>
   );
 }
@@ -1418,7 +1411,7 @@ function OutputScreen({
           <p>Internal notes and a safer user-facing message.</p>
         </div>
 
-        <div className="headerNeedCheckActions">
+        <div className="workspaceHeaderSecondary">
           <button className="plainBtn" onClick={handleCopy}>
             {copied ? "Copied!" : "Copy summary"}
           </button>
@@ -1446,13 +1439,6 @@ function OutputScreen({
             ))}
           </div>
 
-          {savedCandidates.length > 0 && (
-            <>
-              <h3>Saved comparison</h3>
-              <ComparisonView candidates={savedCandidates} />
-            </>
-          )}
-
           <h3>Follow-up questions</h3>
           <ul className="list">
             {review.nextQuestionsForNeedKnower.map((question) => (
@@ -1461,6 +1447,13 @@ function OutputScreen({
           </ul>
         </div>
       </div>
+
+      {savedCandidates.length > 0 && (
+        <section className="panel comparisonPanel">
+          <h2>Saved comparison</h2>
+          <ComparisonView candidates={savedCandidates} />
+        </section>
+      )}
     </section>
   );
 }
@@ -1598,13 +1591,19 @@ function CandidateRow({
   onSelect: () => void;
   onToggleComparison: () => void;
 }) {
+  const cardClassName = [
+    "projectCard",
+    sourceToneClass(candidate),
+    active ? "active" : "",
+    candidate.image ? "" : "noImage",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <article
-      className={active ? "projectCard active" : "projectCard"}
-      onClick={onSelect}
-    >
-      <div className="cardMedia">
-        {candidate.image ? (
+    <article className={cardClassName} onClick={onSelect}>
+      {candidate.image && (
+        <div className="cardMedia">
           <img
             src={candidate.image}
             alt=""
@@ -1614,12 +1613,10 @@ function CandidateRow({
               event.currentTarget.style.display = "none";
             }}
           />
-        ) : (
-          <div className="cardMediaFallback">{candidate.sourceType}</div>
-        )}
+        </div>
+      )}
 
-        {candidate.rejected && <span className="cardRejected">rejected</span>}
-      </div>
+      {candidate.rejected && <span className="cardRejected">rejected</span>}
 
       <div className="cardBody">
         <div className="sourceMeta">
