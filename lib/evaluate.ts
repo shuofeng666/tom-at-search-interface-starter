@@ -326,13 +326,21 @@ weather exposure, choking/sharp edges, electrical risks, medical fit, and
 whether use could distract from safe mobility.
 
 Also estimate costEstimate (this is descriptive, not one of the 0-3 scored
-dimensions above, and does not affect overallScore):
-- For commercial products: use the actual price if mentioned or a realistic
-  market estimate for that category of product.
+dimensions above, and does not affect overallScore). Always read this
+candidate's cost in light of the Need Profile's location (country/region):
+- For commercial products: use the actual price if mentioned. If the listing
+  is priced in a different currency or region than the Need Profile's
+  location, note that conversion/availability is uncertain rather than
+  quoting the listed price as-is. If it's unclear whether the product ships
+  to or is sold in the user's country/region, say so in the note and lean
+  toward "unknown" or a higher tier to reflect that uncertainty/import cost.
 - For TOM projects, open-source, and DIY projects: estimate the cost of
   materials/parts to fabricate it (not TOM's or a maker's labor time).
   Genuinely low-material-cost builds (a few printed/laser-cut parts, basic
-  hardware) should be "free-diy" or "low", not inflated.
+  hardware) should be "free-diy" or "low", not inflated. If a required tool
+  (e.g. a 3D printer, laser cutter) is unlikely to be locally accessible in
+  the user's region, mention that access gap in the note even though the
+  material cost itself may be low.
 - tier must be one of: "free-diy" (no or trivial material cost),
   "low", "moderate", "high", or "unknown" if there's no basis to estimate.
 - note is one short sentence explaining the estimate or why it's unknown.
