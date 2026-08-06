@@ -760,6 +760,45 @@ a {
   .candidateList { column-count: 1; }
 }
 
+.resultsColumns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.resultsColumn {
+  min-width: 0;
+}
+
+.resultsColumnTitle {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Two side-by-side result columns is already the split we want — cancel the
+   masonry multi-column layout inside each so cards stay single-file and
+   readable instead of splitting into 4 narrow columns. */
+.resultsColumns .candidateList {
+  column-count: 1;
+  display: grid;
+  gap: 12px;
+}
+
+.resultsEmpty {
+  color: var(--muted);
+  padding: 8px 0;
+}
+
+@media (max-width: 900px) {
+  .resultsColumns {
+    grid-template-columns: 1fr;
+  }
+}
+
 .projectCard {
   break-inside: avoid;
   margin: 0 0 12px;

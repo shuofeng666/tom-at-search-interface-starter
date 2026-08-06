@@ -78,17 +78,58 @@ function rankTomCandidatesByNeed(
 ) {
   if (!keywords.length && !expandedTerms.length) return candidates;
 
+  const termWeights = buildTermSpecificityWeights(candidates, [
+    ...expandedTerms,
+    ...keywords
+  ]);
+
   return [...candidates].sort(
     (a, b) =>
-      scoreTomCandidate(b, keywords, expandedTerms) -
-      scoreTomCandidate(a, keywords, expandedTerms)
+      scoreTomCandidate(b, keywords, expandedTerms, termWeights) -
+      scoreTomCandidate(a, keywords, expandedTerms, termWeights)
   );
+}
+
+// Common words ("mobility", "home", "independently") show up across a big
+// share of a disability-project catalog and carry little discriminative
+// value; rare/specific words ("diaper", "card holder") are strong signals.
+// Weight each term by how unusual it is *within this catalog* so a title
+// match on a rare term counts far more than one on a term half the catalog
+// happens to mention — otherwise something like "Toddler Mobility Trainer"
+// can out-rank an actual wheelchair project just because "mobility" and
+// "home" are everywhere in a disability-project catalog.
+function buildTermSpecificityWeights(
+  catalog: CandidateProject[],
+  terms: string[]
+): Map<string, number> {
+  const weights = new Map<string, number>();
+
+  for (const term of new Set(terms)) {
+    let docCount = 0;
+
+    for (const candidate of catalog) {
+      const text = `${candidate.title} ${candidate.summary} ${candidate.rawText}`.toLowerCase();
+      if (text.includes(term)) docCount += 1;
+    }
+
+    const ratio = docCount / catalog.length;
+
+    let weight = 1;
+    if (ratio >= 0.15) weight = 0.2;
+    else if (ratio >= 0.08) weight = 0.45;
+    else if (ratio >= 0.03) weight = 0.75;
+
+    weights.set(term, weight);
+  }
+
+  return weights;
 }
 
 function scoreTomCandidate(
   candidate: CandidateProject,
   keywords: string[],
-  expandedTerms: string[]
+  expandedTerms: string[],
+  termWeights: Map<string, number>
 ) {
   const title = candidate.title.toLowerCase();
   const body = [candidate.summary, candidate.rawText].join(" ").toLowerCase();
@@ -98,13 +139,15 @@ function scoreTomCandidate(
   // LLM-expanded category phrases are the strongest relevance signal: a
   // title literally containing "cup holder" is almost certainly on-topic.
   for (const term of expandedTerms) {
-    if (title.includes(term)) score += 6;
-    else if (body.includes(term)) score += 2;
+    const weight = termWeights.get(term) ?? 1;
+    if (title.includes(term)) score += 6 * weight;
+    else if (body.includes(term)) score += 2 * weight;
   }
 
   for (const keyword of keywords) {
-    if (title.includes(keyword)) score += 3;
-    else if (body.includes(keyword)) score += 1;
+    const weight = termWeights.get(keyword) ?? 1;
+    if (title.includes(keyword)) score += 3 * weight;
+    else if (body.includes(keyword)) score += 1 * weight;
   }
 
   return score;

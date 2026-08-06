@@ -676,6 +676,11 @@ function ReviewScreen({
   generateReviewSummary: () => void;
   onBackToIntake: () => void;
 }) {
+  const tomCandidates = candidates.filter(isTomCandidate);
+  const externalCandidates = candidates.filter(
+    (candidate) => !isTomCandidate(candidate),
+  );
+
   return (
     <section className="workspace">
       <header className="workspaceHeader">
@@ -738,20 +743,54 @@ function ReviewScreen({
         <section className="panel resultsPanel">
           <h2>Related projects</h2>
           <p className="small resultsHint">
-            In source order. Tap a card for details.
+            TOM projects on the left, other related work on the right. Tap a
+            card for details.
           </p>
 
-          <div className="candidateList">
-            {candidates.map((candidate) => (
-              <CandidateRow
-                key={candidate.id}
-                candidate={candidate}
-                active={candidate.id === selectedCandidate?.id}
-                selected={selectedForComparison.includes(candidate.id)}
-                onSelect={() => setSelectedCandidateId(candidate.id)}
-                onToggleComparison={() => toggleComparison(candidate.id)}
-              />
-            ))}
+          <div className="resultsColumns">
+            <div className="resultsColumn">
+              <h3 className="resultsColumnTitle">TOM projects</h3>
+              <div className="candidateList">
+                {tomCandidates.length ? (
+                  tomCandidates.map((candidate) => (
+                    <CandidateRow
+                      key={candidate.id}
+                      candidate={candidate}
+                      active={candidate.id === selectedCandidate?.id}
+                      selected={selectedForComparison.includes(candidate.id)}
+                      onSelect={() => setSelectedCandidateId(candidate.id)}
+                      onToggleComparison={() => toggleComparison(candidate.id)}
+                    />
+                  ))
+                ) : (
+                  <p className="small resultsEmpty">
+                    No TOM projects matched yet.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="resultsColumn">
+              <h3 className="resultsColumnTitle">Other related work</h3>
+              <div className="candidateList">
+                {externalCandidates.length ? (
+                  externalCandidates.map((candidate) => (
+                    <CandidateRow
+                      key={candidate.id}
+                      candidate={candidate}
+                      active={candidate.id === selectedCandidate?.id}
+                      selected={selectedForComparison.includes(candidate.id)}
+                      onSelect={() => setSelectedCandidateId(candidate.id)}
+                      onToggleComparison={() => toggleComparison(candidate.id)}
+                    />
+                  ))
+                ) : (
+                  <p className="small resultsEmpty">
+                    No other related work matched yet.
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           {canLoadMore && (
