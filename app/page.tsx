@@ -50,6 +50,38 @@ function isTomCandidate(candidate: CandidateProject) {
   );
 }
 
+const COST_TIER_LABELS: Record<string, string> = {
+  "free-diy": "Free / DIY materials",
+  low: "Low cost",
+  moderate: "Moderate cost",
+  high: "High cost",
+  unknown: "Unknown",
+};
+
+function costLabel(candidate: CandidateProject) {
+  const cost = candidate.evaluation?.costEstimate;
+  if (!cost) return "Unknown";
+
+  const tierLabel = COST_TIER_LABELS[cost.tier] || "Unknown";
+  return cost.note ? `${tierLabel} — ${cost.note}` : tierLabel;
+}
+
+function needsTomTeamLabel(candidate: CandidateProject) {
+  switch (candidate.evaluation?.pathway) {
+    case "needs adaptation":
+    case "maker team review":
+    case "possible new TOM challenge":
+      return "Yes";
+    case "needs more information":
+      return "Maybe";
+    case "can recommend":
+    case "reference only":
+      return "No";
+    default:
+      return "Unknown";
+  }
+}
+
 function splitCategories(category?: string): string[] {
   if (!category) return [];
   return category
@@ -1298,6 +1330,51 @@ function SearchReflectionPanel({
   );
 }
 
+function buildPlainTextSummary({
+  review,
+  needProfile,
+  displayCandidates,
+}: {
+  review: ReviewSummary;
+  needProfile: NeedProfile;
+  displayCandidates: CandidateProject[];
+}) {
+  const location = [needProfile.location.cityOrRegion, needProfile.location.country]
+    .filter(Boolean)
+    .join(", ");
+
+  const lines = [
+    "TOM SEARCH SUMMARY",
+    "",
+    `Activity: ${needProfile.activity}`,
+    `Problem: ${needProfile.problem}`,
+    `Desired outcome: ${needProfile.desiredOutcome}`,
+    `Age / role: ${[needProfile.userAge, needProfile.seekerRole].filter(Boolean).join(" / ")}`,
+    location ? `Location: ${location}` : "",
+    "",
+    "NEED SUMMARY",
+    review.needSummary,
+    "",
+    "USER-FACING MESSAGE",
+    review.userFacingMessage,
+    "",
+    "RECOMMENDED PATHWAY",
+    review.recommendedPathway,
+    "",
+    "OPTIONS TO DISCUSS",
+    ...displayCandidates.flatMap((candidate) => [
+      `- ${candidate.title} (${candidate.sourceType}) — ${candidate.url}`,
+      `  Fit: ${fitAssessmentText(candidate)}`,
+      `  Cost: ${costLabel(candidate)} | Needs TOM team?: ${needsTomTeamLabel(candidate)}`,
+    ]),
+    "",
+    "FOLLOW-UP QUESTIONS FOR NEED-KNOWER",
+    ...review.nextQuestionsForNeedKnower.map((question) => `- ${question}`),
+  ];
+
+  return lines.filter((line) => line !== undefined).join("\n");
+}
+
 function OutputScreen({
   review,
   needProfile,
@@ -1315,9 +1392,23 @@ function OutputScreen({
     ? savedCandidates
     : candidates.slice(0, 3);
 
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    const text = buildPlainTextSummary({ review, needProfile, displayCandidates });
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error("Copy to clipboard failed", error);
+    }
+  }
+
   return (
-    <section className="workspace outputWorkspace">
-      <header className="workspaceHeader">
+    <section className="workspace outputWorkspace printSummary">
+      <header className="workspaceHeader noPrint">
         <button className="plainBtn" onClick={onBackToReview}>
           ← Review
         </button>
@@ -1325,6 +1416,15 @@ function OutputScreen({
         <div>
           <h1>Prepared summary</h1>
           <p>Internal notes and a safer user-facing message.</p>
+        </div>
+
+        <div className="headerNeedCheckActions">
+          <button className="plainBtn" onClick={handleCopy}>
+            {copied ? "Copied!" : "Copy summary"}
+          </button>
+          <button className="plainBtn" onClick={() => window.print()}>
+            Print / Save as PDF
+          </button>
         </div>
       </header>
 
@@ -1345,6 +1445,13 @@ function OutputScreen({
               <UserFacingCard key={candidate.id} candidate={candidate} />
             ))}
           </div>
+
+          {savedCandidates.length > 0 && (
+            <>
+              <h3>Saved comparison</h3>
+              <ComparisonView candidates={savedCandidates} />
+            </>
+          )}
 
           <h3>Follow-up questions</h3>
           <ul className="list">
@@ -1617,6 +1724,17 @@ function CandidateDetail({
         </p>
       </div>
 
+      <div className="detailStatsRow">
+        <div className="detailStat">
+          <b>Cost</b>
+          <span>{costLabel(candidate)}</span>
+        </div>
+        <div className="detailStat">
+          <b>Needs TOM team?</b>
+          <span>{needsTomTeamLabel(candidate)}</span>
+        </div>
+      </div>
+
       <ChipRow
         label="Matched needs"
         items={evaluation.matchedCriteria}
@@ -1678,6 +1796,8 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
   <th>Type</th>
   <th>Fit assessment</th>
   <th>Adaptation / access</th>
+  <th>Cost</th>
+  <th>Needs TOM team?</th>
   <th>What to check</th>
 </tr>
         </thead>
@@ -1693,6 +1813,8 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
       candidate.evaluation.accessPathway.explanation ||
       "No adaptation or access assessment available."}
   </td>
+  <td>{costLabel(candidate)}</td>
+  <td>{needsTomTeamLabel(candidate)}</td>
   <td>
     {candidate.evaluation.missingInformation
       .slice(0, 2)
@@ -1700,7 +1822,7 @@ function ComparisonView({ candidates }: { candidates: CandidateProject[] }) {
   </td>
 </tr>
 
-           
+
           ))}
         </tbody>
       </table>
@@ -1772,6 +1894,12 @@ function UserFacingCard({ candidate }: { candidate: CandidateProject }) {
         <b>What TOM should check:</b>{" "}
         {candidate.evaluation.missingInformation.slice(0, 3).join(", ") ||
           "No major missing information detected."}
+      </p>
+
+      <p className="small">
+        <b>Cost:</b> {costLabel(candidate)}
+        {" · "}
+        <b>Needs TOM team?</b> {needsTomTeamLabel(candidate)}
       </p>
 
       <a

@@ -2,6 +2,8 @@ import {
   CandidateEvaluation,
   CandidateProject,
   CandidateSourceType,
+  CostEstimate,
+  CostTier,
   emptyCandidateEvaluation,
   EvaluationDimension,
   ExaSearchResult,
@@ -323,6 +325,18 @@ wheelchair propulsion, braking, balance, visibility, attachment stability,
 weather exposure, choking/sharp edges, electrical risks, medical fit, and
 whether use could distract from safe mobility.
 
+Also estimate costEstimate (this is descriptive, not one of the 0-3 scored
+dimensions above, and does not affect overallScore):
+- For commercial products: use the actual price if mentioned or a realistic
+  market estimate for that category of product.
+- For TOM projects, open-source, and DIY projects: estimate the cost of
+  materials/parts to fabricate it (not TOM's or a maker's labor time).
+  Genuinely low-material-cost builds (a few printed/laser-cut parts, basic
+  hardware) should be "free-diy" or "low", not inflated.
+- tier must be one of: "free-diy" (no or trivial material cost),
+  "low", "moderate", "high", or "unknown" if there's no basis to estimate.
+- note is one short sentence explaining the estimate or why it's unknown.
+
 Hard scoring rules:
 - Do not average away a hard failure.
 - If needFit is 0, overallScore must be 0.8 or below.
@@ -356,6 +370,7 @@ Return ONLY valid JSON with this exact shape:
   "adaptationFeasibility": { "score": number, "explanation": "string", "evidence": ["string"] },
   "evidenceQuality": { "score": number, "explanation": "string", "evidence": ["string"] },
   "safetyAndRisk": { "score": number, "explanation": "string", "evidence": ["string"] },
+  "costEstimate": { "tier": "free-diy | low | moderate | high | unknown", "note": "string" },
   "hardFailures": ["string"],
   "matchedCriteria": ["string"],
   "unmatchedCriteria": ["string"],
@@ -400,6 +415,7 @@ export function normalizeEvaluation(input: unknown): CandidateEvaluation {
       empty.evidenceQuality
     ),
     safetyAndRisk: normalizeDimension(value.safetyAndRisk, empty.safetyAndRisk),
+    costEstimate: normalizeCostEstimate(value.costEstimate, empty.costEstimate),
 
     hardFailures: toStringArray(value.hardFailures),
     matchedCriteria: toStringArray(value.matchedCriteria),
@@ -433,6 +449,28 @@ function normalizeDimension(input: unknown, fallback: EvaluationDimension): Eval
         : fallback.explanation,
     evidence: toStringArray(value.evidence)
   };
+}
+
+const COST_TIERS: CostTier[] = ["free-diy", "low", "moderate", "high", "unknown"];
+
+function normalizeCostEstimate(
+  input: unknown,
+  fallback: CostEstimate
+): CostEstimate {
+  const value =
+    input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+
+  const tier =
+    typeof value.tier === "string" && COST_TIERS.includes(value.tier as CostTier)
+      ? (value.tier as CostTier)
+      : fallback.tier;
+
+  const note =
+    typeof value.note === "string" && value.note.trim()
+      ? value.note.trim()
+      : fallback.note;
+
+  return { tier, note };
 }
 
 function computeWeightedOverall(evaluation: CandidateEvaluation) {

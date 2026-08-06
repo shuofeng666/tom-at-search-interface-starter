@@ -1016,6 +1016,34 @@ a {
   line-height: 1.5;
   color: var(--ink);
 }
+.detailStatsRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.detailStat {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detailStat b {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.detailStat span {
+  font-size: 13px;
+  color: var(--ink);
+}
+
 .rawSummary {
   margin: 16px 0;
   border-top: 1px solid var(--line);
@@ -1223,4 +1251,29 @@ a {
 .historyRowMeta {
   font-size: 13px;
   color: var(--muted);
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .printSummary,
+  .printSummary * {
+    visibility: visible;
+  }
+
+  .printSummary {
+    position: absolute;
+    inset: 0;
+    padding: 24px;
+  }
+
+  .noPrint {
+    display: none !important;
+  }
+
+  .outputGrid {
+    grid-template-columns: 1fr !important;
+  }
 }

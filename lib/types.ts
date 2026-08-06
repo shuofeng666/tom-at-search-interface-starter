@@ -80,6 +80,13 @@ export type EvaluationDimension = {
   evidence?: string[];
 };
 
+export type CostTier = "free-diy" | "low" | "moderate" | "high" | "unknown";
+
+export type CostEstimate = {
+  tier: CostTier;
+  note: string;
+};
+
 export type CandidateEvaluation = {
   overallScore: number;
 
@@ -91,6 +98,10 @@ export type CandidateEvaluation = {
   adaptationFeasibility: EvaluationDimension;
   evidenceQuality: EvaluationDimension;
   safetyAndRisk: EvaluationDimension;
+
+  // Descriptive only — not part of the 0-3 scored dimensions above or the
+  // weighted overallScore.
+  costEstimate: CostEstimate;
 
   hardFailures: string[];
   matchedCriteria: string[];
@@ -210,6 +221,7 @@ export function emptyCandidateEvaluation(): CandidateEvaluation {
     adaptationFeasibility: emptyEvaluationDimension(),
     evidenceQuality: emptyEvaluationDimension(),
     safetyAndRisk: emptyEvaluationDimension(),
+    costEstimate: { tier: "unknown", note: "Cost not assessed yet." },
     hardFailures: [],
     matchedCriteria: [],
     unmatchedCriteria: [],
