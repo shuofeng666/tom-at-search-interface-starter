@@ -29,7 +29,7 @@ type SearchPoolResponse = {
   tomCatalogSnapshotDate: string | null;
 };
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 10;
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -80,6 +80,39 @@ function needsTomTeamLabel(candidate: CandidateProject) {
     default:
       return "Unknown";
   }
+}
+
+// Configure via NEXT_PUBLIC_TOM_CONTACT_EMAIL. Falls back to a placeholder
+// so the button still works (just visibly not a real address) if unset.
+const TOM_CONTACT_EMAIL =
+  process.env.NEXT_PUBLIC_TOM_CONTACT_EMAIL || "help@tomglobal.org";
+
+function buildTomTeamRequestMailto(
+  candidate: CandidateProject,
+  needProfile: NeedProfile,
+) {
+  const subject = `TOM team review request: ${candidate.title}`;
+
+  const body = [
+    `A search turned up a possible match that needs TOM's help to evaluate or adapt.`,
+    ``,
+    `Project: ${candidate.title}`,
+    `Link: ${candidate.url}`,
+    ``,
+    `Need: ${needProfile.activity}`,
+    `Problem: ${needProfile.problem}`,
+    `Desired outcome: ${needProfile.desiredOutcome}`,
+    [needProfile.userAge, needProfile.seekerRole].filter(Boolean).length
+      ? `Age / role: ${[needProfile.userAge, needProfile.seekerRole].filter(Boolean).join(" / ")}`
+      : "",
+    ``,
+    `Why this needs TOM: ${candidate.evaluation?.pathwayReason || "See fit assessment on the project page."}`,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+
+  const params = new URLSearchParams({ subject, body });
+  return `mailto:${TOM_CONTACT_EMAIL}?${params.toString()}`;
 }
 
 function splitCategories(category?: string): string[] {
@@ -626,7 +659,12 @@ export default function Home() {
     <main className={loading ? "app isLoading" : "app"}>
       <InterfaceOverrides />
 
-      {loading && <div className="loadingPill">{loading}...</div>}
+      {loading && (
+        <div className="loadingPill">
+          <span className="spinner onDark" />
+          {loading}...
+        </div>
+      )}
       {error && <div className="errorBanner">{error}</div>}
 
       {stage === "intake" && (
@@ -765,7 +803,10 @@ function IntakeScreen({
   const userTurnCount = messages.filter(
     (message) => message.role === "user",
   ).length;
-  const showSearchAction = readyForSearch && userTurnCount >= 2;
+  // The agent's own "ready" judgment is a quality signal, not a gate — once
+  // the user has answered at least once, let them jump to search whenever
+  // they want. Q&A keeps going if they'd rather answer more first.
+  const showSearchAction = userTurnCount >= 1;
 
   if (!messages.length) {
     return (
@@ -869,8 +910,13 @@ function IntakeScreen({
                 className="searchActionBtn"
                 type="button"
                 onClick={onStartSearch}
+                title={
+                  readyForSearch
+                    ? undefined
+                    : "You can search now, or answer a bit more first for better results."
+                }
               >
-                Search related projects
+                {readyForSearch ? "Search related projects" : "Search now"}
               </button>
             )}
           </div>
@@ -1141,7 +1187,14 @@ function ReviewScreen({
               onClick={loadMore}
               disabled={loadingMore}
             >
-              {loadingMore ? "Scoring…" : "Load more"}
+              {loadingMore ? (
+                <>
+                  <span className="spinner" />
+                  Scoring…
+                </>
+              ) : (
+                "Load more"
+              )}
             </button>
           )}
         </section>
@@ -1150,6 +1203,7 @@ function ReviewScreen({
           {selectedCandidate ? (
             <CandidateDetail
               candidate={selectedCandidate}
+              needProfile={needProfile}
               selected={selectedForComparison.includes(selectedCandidate.id)}
               onToggleComparison={() => toggleComparison(selectedCandidate)}
               onReject={(reason) => rejectCandidate(selectedCandidate, reason)}
@@ -1435,7 +1489,11 @@ function OutputScreen({
           <h3>Options to discuss</h3>
           <div className="cards oneCol">
             {displayCandidates.map((candidate) => (
-              <UserFacingCard key={candidate.id} candidate={candidate} />
+              <UserFacingCard
+                key={candidate.id}
+                candidate={candidate}
+                needProfile={needProfile}
+              />
             ))}
           </div>
 
@@ -1656,17 +1714,20 @@ function CandidateRow({
 
 function CandidateDetail({
   candidate,
+  needProfile,
   selected,
   onToggleComparison,
   onReject,
 }: {
   candidate: CandidateProject;
+  needProfile: NeedProfile;
   selected: boolean;
   onToggleComparison: () => void;
   onReject: (reason: string) => void;
 }) {
   const [reason, setReason] = useState(rejectionOptions[0].value);
   const evaluation = candidate.evaluation;
+  const needsTeam = needsTomTeamLabel(candidate);
 
   return (
     <article className="candidateDetail">
@@ -1690,17 +1751,35 @@ function CandidateDetail({
         Open original ↗
       </a>
 
-      {candidate.image && (
-        <img
-          className="detailThumb"
-          src={candidate.image}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={(event) => {
-            event.currentTarget.style.display = "none";
-          }}
-        />
+      {candidate.images && candidate.images.length > 1 ? (
+        <div className="detailGallery">
+          {candidate.images.map((src) => (
+            <img
+              key={src}
+              className="detailGalleryImg"
+              src={src}
+              alt=""
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              onError={(event) => {
+                event.currentTarget.style.display = "none";
+              }}
+            />
+          ))}
+        </div>
+      ) : (
+        candidate.image && (
+          <img
+            className="detailThumb"
+            src={candidate.image}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={(event) => {
+              event.currentTarget.style.display = "none";
+            }}
+          />
+        )
       )}
 
 <div className="evalBlock">
@@ -1728,9 +1807,18 @@ function CandidateDetail({
         </div>
         <div className="detailStat">
           <b>Needs TOM team?</b>
-          <span>{needsTomTeamLabel(candidate)}</span>
+          <span>{needsTeam}</span>
         </div>
       </div>
+
+      {(needsTeam === "Yes" || needsTeam === "Maybe") && (
+        <a
+          className="requestHelpBtn"
+          href={buildTomTeamRequestMailto(candidate, needProfile)}
+        >
+          Request TOM team help ✉
+        </a>
+      )}
 
       <ChipRow
         label="Matched needs"
@@ -1873,7 +1961,15 @@ function SummaryList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function UserFacingCard({ candidate }: { candidate: CandidateProject }) {
+function UserFacingCard({
+  candidate,
+  needProfile,
+}: {
+  candidate: CandidateProject;
+  needProfile: NeedProfile;
+}) {
+  const needsTeam = needsTomTeamLabel(candidate);
+
   return (
     <article className="userFacingCard">
       <h3>{candidate.title}</h3>
@@ -1896,17 +1992,28 @@ function UserFacingCard({ candidate }: { candidate: CandidateProject }) {
       <p className="small">
         <b>Cost:</b> {costLabel(candidate)}
         {" · "}
-        <b>Needs TOM team?</b> {needsTomTeamLabel(candidate)}
+        <b>Needs TOM team?</b> {needsTeam}
       </p>
 
-      <a
-        className="openLink"
-        href={candidate.url}
-        target="_blank"
-        rel="noreferrer"
-      >
-        Open original ↗
-      </a>
+      <div className="cardFoot">
+        <a
+          className="openLink"
+          href={candidate.url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open original ↗
+        </a>
+
+        {(needsTeam === "Yes" || needsTeam === "Maybe") && (
+          <a
+            className="requestHelpBtn"
+            href={buildTomTeamRequestMailto(candidate, needProfile)}
+          >
+            Request TOM team help ✉
+          </a>
+        )}
+      </div>
     </article>
   );
 }

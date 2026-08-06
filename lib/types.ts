@@ -120,6 +120,7 @@ export type CandidateProject = {
   source: string;
   sourceType: CandidateSourceType;
   image?: string;
+  images?: string[];
   summary: string;
   rawText?: string;
   category?: string;

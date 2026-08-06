@@ -37,3 +37,18 @@ search until this file is refreshed. To update it, ask TOM for a fresh
 export in the same column format, replace `data/tom-solutions.csv`, and
 update the date in `data/tom-solutions.meta.json` — the results page shows
 that date next to the TOM results so staff know how fresh the data is.
+
+### TOM project photos
+
+The CSV export has no image columns. If `TOM_SEARCH_API_URL` is set, TOM
+cards fetch their real photos (all of them, not just one) from that live
+endpoint — this is used only for photos, never for search/ranking, so it's
+optional; without it TOM cards just show no photo.
+
+### "Request TOM team help"
+
+Candidates whose evaluation pathway suggests TOM staff involvement (needs
+adaptation, maker team review, possible new TOM challenge, or needs more
+information) show a "Request TOM team help" button that opens a pre-filled
+email. Set `NEXT_PUBLIC_TOM_CONTACT_EMAIL` to the real inbox that should
+receive these.

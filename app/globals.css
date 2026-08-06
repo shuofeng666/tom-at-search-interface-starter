@@ -62,6 +62,31 @@ a {
   color: white;
   font-size: 14px;
   box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+}
+
+.spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(15, 23, 42, 0.15);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin-right: 7px;
+  vertical-align: -2px;
+}
+
+.spinner.onDark {
+  border-color: rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .landing {
@@ -980,6 +1005,23 @@ a {
   font-size: 12px;
 }
 
+.requestHelpBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 6px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  text-decoration: none;
+}
+.requestHelpBtn:hover {
+  background: #fde68a;
+}
+
 /* ============ formatted detail panel ============ */
 .detailHead {
   display: flex;
@@ -1014,6 +1056,26 @@ a {
 .detailPathway {
   display: inline-block;
   margin-bottom: 14px;
+}
+
+.detailGallery {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 2px 0 12px;
+}
+
+.detailGalleryImg {
+  width: 100%;
+  height: 110px;
+  object-fit: cover;
+  border-radius: 12px;
+  display: block;
+}
+
+.detailGalleryImg:first-child:nth-last-child(odd) {
+  grid-column: 1 / -1;
+  height: 160px;
 }
 .evalBlock {
   margin: 12px 0;

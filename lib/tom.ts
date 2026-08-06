@@ -23,6 +23,7 @@ const CSV_META_PATH = path.join(
 );
 
 let catalogCache: CandidateProject[] | null = null;
+let catalogFetchInFlight: Promise<CandidateProject[]> | null = null;
 let snapshotDateCache: string | null | undefined;
 
 // The date TOM exported data/tom-solutions.csv, so the UI can be upfront
@@ -63,7 +64,7 @@ export async function searchTomProjects({
   needProfile: NeedProfile;
   limit?: number;
 }): Promise<CandidateProject[]> {
-  const catalog = getTomCatalog();
+  const catalog = await getTomCatalog();
 
   if (!catalog.length) {
     console.warn(
@@ -87,25 +88,175 @@ export async function searchTomProjects({
   return ranked.slice(0, limit);
 }
 
-function getTomCatalog(): CandidateProject[] {
+async function getTomCatalog(): Promise<CandidateProject[]> {
   if (catalogCache) return catalogCache;
+  if (catalogFetchInFlight) return catalogFetchInFlight;
 
-  try {
-    const raw = fs.readFileSync(CSV_PATH, "utf-8");
-    const rows = parseCsv(raw);
-    const records = rowsToRecords(rows);
+  catalogFetchInFlight = (async () => {
+    try {
+      const raw = fs.readFileSync(CSV_PATH, "utf-8");
+      const rows = parseCsv(raw);
+      const records = rowsToRecords(rows);
 
-    catalogCache = records
-      .map(buildTomCandidateFromRecord)
-      .filter((candidate): candidate is CandidateProject => candidate !== null);
+      // The CSV export has no image columns, but TOM's own project data does
+      // (imagesUrls / thumbnailImageUrl) — fetch that separately, purely to
+      // enrich cards with real photos. This does not affect search/ranking
+      // at all (that's CSV-only, see searchTomProjects above); it's a no-op
+      // if TOM_SEARCH_API_URL isn't configured.
+      const imageMap = await getTomImageMap();
 
-    console.log("TOM catalog loaded", { rows: catalogCache.length });
-  } catch (error) {
-    console.error("Failed to load TOM solutions CSV:", error);
-    catalogCache = [];
+      const items = records
+        .map((record) => buildTomCandidateFromRecord(record, imageMap))
+        .filter((candidate): candidate is CandidateProject => candidate !== null);
+
+      console.log("TOM catalog loaded", {
+        rows: items.length,
+        withImages: items.filter((c) => c.image).length
+      });
+
+      catalogCache = items;
+      return items;
+    } catch (error) {
+      console.error("Failed to load TOM solutions CSV:", error);
+      catalogCache = [];
+      return catalogCache;
+    } finally {
+      catalogFetchInFlight = null;
+    }
+  })();
+
+  return catalogFetchInFlight;
+}
+
+type TomImageProject = {
+  _id: string;
+  imagesUrls?: string[];
+  thumbnailImageUrl?: string;
+  additionalInformation?: {
+    challengeImage?: string;
+  };
+};
+
+type TomImageSearchResponse = {
+  projects?: {
+    totalNumberOfPages?: number;
+    items?: TomImageProject[];
+  };
+};
+
+const IMAGE_PAGE_SIZE = 100;
+const IMAGE_MAX_PAGES = 10;
+const IMAGE_MAP_TTL_MS = 30 * 60 * 1000;
+
+// Every project's full photo set (usually 3-4 images), not just one
+// thumbnail — id -> ordered image URLs.
+let imageMapCache: Map<string, string[]> | null = null;
+let imageMapFetchedAt = 0;
+let imageMapFetchInFlight: Promise<Map<string, string[]>> | null = null;
+
+async function getTomImageMap(): Promise<Map<string, string[]>> {
+  const endpoint = process.env.TOM_SEARCH_API_URL;
+  if (!endpoint) return new Map();
+
+  if (imageMapCache && Date.now() - imageMapFetchedAt < IMAGE_MAP_TTL_MS) {
+    return imageMapCache;
   }
 
-  return catalogCache;
+  if (imageMapFetchInFlight) return imageMapFetchInFlight;
+
+  imageMapFetchInFlight = (async () => {
+    try {
+      const first = await fetchTomImagePage(endpoint, 0, IMAGE_PAGE_SIZE);
+      const pagesToFetch = Math.min(
+        Math.max(first.totalPages, 1),
+        IMAGE_MAX_PAGES
+      );
+
+      const restPages = await Promise.all(
+        Array.from({ length: Math.max(0, pagesToFetch - 1) }, (_, index) =>
+          fetchTomImagePage(
+            endpoint,
+            (index + 1) * IMAGE_PAGE_SIZE,
+            IMAGE_PAGE_SIZE
+          )
+        )
+      );
+
+      const map = new Map<string, string[]>();
+      for (const page of [first, ...restPages]) {
+        for (const project of page.items) {
+          if (!project._id) continue;
+
+          const images = Array.from(
+            new Set(
+              [
+                ...(project.imagesUrls || []),
+                project.additionalInformation?.challengeImage,
+                project.thumbnailImageUrl
+              ].filter((url): url is string => Boolean(url))
+            )
+          );
+
+          if (images.length) map.set(project._id, images);
+        }
+      }
+
+      console.log("TOM image map fetched", {
+        totalPages: first.totalPages,
+        pagesFetched: pagesToFetch,
+        projectsWithImages: map.size
+      });
+
+      imageMapCache = map;
+      imageMapFetchedAt = Date.now();
+      return map;
+    } catch (error) {
+      console.error(
+        "TOM image map fetch failed, continuing without TOM images",
+        error
+      );
+      return imageMapCache || new Map();
+    } finally {
+      imageMapFetchInFlight = null;
+    }
+  })();
+
+  return imageMapFetchInFlight;
+}
+
+async function fetchTomImagePage(
+  endpoint: string,
+  skip: number,
+  limit: number
+): Promise<{ items: TomImageProject[]; totalPages: number }> {
+  try {
+    const url = new URL(endpoint);
+    url.searchParams.set("skip", String(skip));
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("selectedTypes", "5");
+    url.searchParams.set("userInput", "");
+
+    const res = await fetch(url.toString(), {
+      headers: { Accept: "application/json" },
+      cache: "no-store"
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("TOM image API error:", res.status, text.slice(0, 300));
+      return { items: [], totalPages: 0 };
+    }
+
+    const data = (await res.json()) as TomImageSearchResponse;
+
+    return {
+      items: data.projects?.items || [],
+      totalPages: data.projects?.totalNumberOfPages || 0
+    };
+  } catch (error) {
+    console.error("TOM image page fetch failed:", skip, error);
+    return { items: [], totalPages: 0 };
+  }
 }
 
 function rankTomCandidatesByNeed(
@@ -379,10 +530,13 @@ function rowsToRecords(rows: string[][]): TomSolutionRecord[] {
 }
 
 function buildTomCandidateFromRecord(
-  record: TomSolutionRecord
+  record: TomSolutionRecord,
+  imageMap: Map<string, string[]>
 ): CandidateProject | null {
   const id = extractProjectId(record.link) || stableId(record.link);
   if (!id) return null;
+
+  const images = imageMap.get(id);
 
   const rawText = [
     record.name,
@@ -403,7 +557,8 @@ function buildTomCandidateFromRecord(
     url: record.link,
     source: "tomglobal.org",
     sourceType: "TOM project",
-    image: undefined,
+    image: images?.[0],
+    images,
     summary: record.summary || trimText(rawText, 420),
     rawText,
     category: record.category || undefined,

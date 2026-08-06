@@ -17,8 +17,8 @@ const PRIMARY_PER_DOMAIN = 6;
 const SECONDARY_PER_DOMAIN = 3;
 const COMMERCIAL_PER_DOMAIN = 3;
 
-const FIRST_PAGE_SIZE = 8;
-const TOM_FIRST_PAGE_SLOTS = 4;
+const FIRST_PAGE_SIZE = 10;
+const TOM_FIRST_PAGE_SLOTS = 5;
 
 export type SearchPoolResponse = {
   query: string;
