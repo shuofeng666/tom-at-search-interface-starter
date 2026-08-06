@@ -34,8 +34,11 @@ const PAGE_SIZE = 10;
 // A search should land with a reasonable number of results, not whatever
 // happened to clear the bar in a single batch. Auto-score further pages
 // until this many are visible, capped so a genuinely weak pool doesn't spin
-// forever burning Gemini calls.
+// forever burning Gemini calls. TOM has its own floor within that total —
+// this is TOM's own search interface, so "8 total but only 1 is TOM" isn't
+// good enough.
 const MIN_TOTAL_VISIBLE_TARGET = 8;
+const MIN_TOM_VISIBLE_TARGET = 4;
 const MAX_AUTO_SCORE_BATCHES = 4;
 
 function createId() {
@@ -242,7 +245,7 @@ function sortDisplayCandidates(candidates: CandidateProject[]) {
 // mismatch — a guaranteed slot still has to be a plausible fit, and this can
 // only pull from candidates already scored in this batch, so it's a
 // best-effort floor, not an absolute guarantee.
-const MIN_GUARANTEED_TOM_VISIBLE = 2;
+const MIN_GUARANTEED_TOM_VISIBLE = 4;
 const MIN_GUARANTEED_EXTERNAL_VISIBLE = 2;
 
 function backfillGroup(
@@ -360,7 +363,7 @@ export default function Home() {
     null,
   );
 
-  const [sessionId] = useState(() => createId());
+  const [sessionId, setSessionId] = useState(() => createId());
   const [historyEntries, setHistoryEntries] = useState<SearchHistoryEntry[]>(
     [],
   );
@@ -395,6 +398,11 @@ export default function Home() {
   }
 
   function restoreFromHistory(entry: SearchHistoryEntry) {
+    // Adopt the restored entry's id as the active session so any further
+    // action (including the image backfill below) updates this same
+    // history entry instead of forking a new one under the original
+    // page-load session id.
+    setSessionId(entry.id);
     setNeedProfile(entry.needProfile);
     setMessages(entry.messages);
     setQuery(entry.query);
@@ -407,6 +415,13 @@ export default function Home() {
     setReadyForSearch(true);
     setStage("review");
     setHistoryOpen(false);
+    // Older snapshots saved before image lookup existed (or before it
+    // resolved) won't have photos — try to backfill them now. Don't
+    // re-persist from here (see enrichTomImages) since pool/poolCursor/
+    // selectedForComparison/sessionId are all being switched to this
+    // entry's values in this same call, and this callback's closure would
+    // still see the old ones by the time it resolves.
+    enrichTomImages(entry.candidates, false);
   }
 
   function removeHistoryEntry(id: string) {
@@ -509,6 +524,66 @@ export default function Home() {
     return (data.candidates || []) as CandidateProject[];
   }
 
+  // Fire-and-forget: look up real photos only for the TOM candidates that
+  // actually made it on screen (not the whole search pool — see lib/tom.ts).
+  // Candidates render immediately without waiting on this; images pop in
+  // once the lookup resolves.
+  //
+  // `persist` controls whether the result also gets written back to search
+  // history via the closure over pool/poolCursor/selectedForComparison/
+  // sessionId. Skip it (pass false) right after those are being changed
+  // synchronously by the caller (restoreFromHistory) — this callback's
+  // closure would still see the pre-change values when it resolves, and
+  // could stomp the just-restored entry with stale data.
+  function enrichTomImages(visible: CandidateProject[], persist = true) {
+    const targets = visible.filter(
+      (candidate) => isTomCandidate(candidate) && !candidate.image,
+    );
+    if (!targets.length) return;
+
+    fetch("/api/tom-images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidates: targets.map((candidate) => ({
+          id: candidate.id,
+          title: candidate.title,
+        })),
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const results = (data?.results || []) as Array<{
+          id: string;
+          image?: string;
+          images?: string[];
+        }>;
+        if (!results.length) return;
+
+        const byId = new Map(results.map((result) => [result.id, result]));
+        let updated: CandidateProject[] = [];
+
+        setCandidates((previous) => {
+          updated = previous.map((candidate) => {
+            const found = byId.get(candidate.id);
+            return found?.image
+              ? { ...candidate, image: found.image, images: found.images }
+              : candidate;
+          });
+          return updated;
+        });
+
+        // Re-persist so images survive a later "restore from History" too,
+        // not just the current live view.
+        if (persist) {
+          persistHistory(updated, pool, poolCursor, selectedForComparison);
+        }
+      })
+      .catch((error) => {
+        console.error("TOM image enrichment failed", error);
+      });
+  }
+
   async function startSearch(customQuery?: string) {
     setLoading("searching projects");
     setError(null);
@@ -562,10 +637,14 @@ export default function Home() {
       let visibleScored: CandidateProject[] = [];
       let batchesFetched = 0;
 
+      const needsMoreResults = () =>
+        visibleScored.length < MIN_TOTAL_VISIBLE_TARGET ||
+        visibleScored.filter(isTomCandidate).length < MIN_TOM_VISIBLE_TARGET;
+
       while (
         cursor < fetchedPool.length &&
         batchesFetched < MAX_AUTO_SCORE_BATCHES &&
-        visibleScored.length < MIN_TOTAL_VISIBLE_TARGET
+        needsMoreResults()
       ) {
         const batch = fetchedPool.slice(cursor, cursor + PAGE_SIZE);
         batchesFetched += 1;
@@ -573,7 +652,7 @@ export default function Home() {
         setLoading(
           batchesFetched === 1
             ? "searching projects"
-            : `searching projects (${visibleScored.length}/${MIN_TOTAL_VISIBLE_TARGET} found so far)`,
+            : `searching projects (${visibleScored.filter(isTomCandidate).length}/${MIN_TOM_VISIBLE_TARGET} TOM, ${visibleScored.length}/${MIN_TOTAL_VISIBLE_TARGET} total so far)`,
         );
 
         const scoredBatch = await scoreBatch(batch);
@@ -585,6 +664,7 @@ export default function Home() {
       setCandidates(visibleScored);
       setPoolCursor(cursor);
       setSelectedCandidateId(visibleScored[0]?.id || null);
+      enrichTomImages(visibleScored);
       persistHistory(
         visibleScored,
         fetchedPool,
@@ -622,6 +702,7 @@ export default function Home() {
 
       setCandidates(mergedCandidates);
       setPoolCursor(nextPoolCursor);
+      enrichTomImages(visibleScored);
       persistHistory(
         mergedCandidates,
         pool,

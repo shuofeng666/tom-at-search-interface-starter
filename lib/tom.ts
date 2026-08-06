@@ -79,19 +79,19 @@ export async function searchTomProjects({
   const ranked = rankTomCandidatesByNeed(catalog, keywords, expandedTerms);
   const topCandidates = ranked.slice(0, limit);
 
-  // Only fetch photos for the handful of candidates we're actually about to
-  // show (not the whole catalog) — see attachTomImages for why.
-  const withImages = await attachTomImages(topCandidates);
-
   console.log("TOM catalog match", {
     catalogSize: catalog.length,
     expandedTerms,
     keywords,
-    top: withImages.map((candidate) => candidate.title),
-    withImages: withImages.filter((candidate) => candidate.image).length
+    top: topCandidates.map((candidate) => candidate.title)
   });
 
-  return withImages;
+  // No images fetched here on purpose: this pool is still ~20 candidates,
+  // most of which never end up on screen (scoring + visibility filtering
+  // narrows it down client-side). Images are fetched afterwards, only for
+  // the handful that actually get displayed — see attachTomImages, called
+  // from /api/tom-images.
+  return topCandidates;
 }
 
 async function getTomCatalog(): Promise<CandidateProject[]> {
@@ -156,11 +156,17 @@ const imageLookupCache = new Map<string, ImageLookupEntry>();
 // short per-request timeout so one slow lookup can't stall the rest. A no-op
 // if TOM_SEARCH_API_URL isn't configured; never affects search/ranking,
 // which is CSV-only (see searchTomProjects above).
-async function attachTomImages(
-  candidates: CandidateProject[]
-): Promise<CandidateProject[]> {
+export type TomImageLookupResult = {
+  id: string;
+  image?: string;
+  images?: string[];
+};
+
+export async function attachTomImages(
+  candidates: Array<{ id: string; title: string }>
+): Promise<TomImageLookupResult[]> {
   const endpoint = process.env.TOM_SEARCH_API_URL;
-  if (!endpoint) return candidates;
+  if (!endpoint) return candidates.map(({ id }) => ({ id }));
 
   const results = await Promise.allSettled(
     candidates.map((candidate) =>
@@ -171,8 +177,9 @@ async function attachTomImages(
   return candidates.map((candidate, index) => {
     const result = results[index];
     const images = result.status === "fulfilled" ? result.value : null;
-    if (!images || !images.length) return candidate;
-    return { ...candidate, image: images[0], images };
+
+    if (!images || !images.length) return { id: candidate.id };
+    return { id: candidate.id, image: images[0], images };
   });
 }
 
