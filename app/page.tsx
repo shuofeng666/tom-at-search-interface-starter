@@ -31,6 +31,13 @@ type SearchPoolResponse = {
 
 const PAGE_SIZE = 10;
 
+// A search should land with a reasonable number of results, not whatever
+// happened to clear the bar in a single batch. Auto-score further pages
+// until this many are visible, capped so a genuinely weak pool doesn't spin
+// forever burning Gemini calls.
+const MIN_TOTAL_VISIBLE_TARGET = 8;
+const MAX_AUTO_SCORE_BATCHES = 4;
+
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -544,18 +551,44 @@ export default function Home() {
         return;
       }
 
-      // Score only the first page; the rest waits behind "Load more".
-      const firstBatch = fetchedPool.slice(0, PAGE_SIZE);
-      const scored = await scoreBatch(firstBatch);
-      const visibleScored = prepareVisibleCandidates(scored);
+      // Score pages one at a time, but don't stop at the first page just
+      // because it's the first page: if too few candidates clear the
+      // visibility bar (common when a batch happens to skew toward weak
+      // matches), keep scoring further pages automatically until there's a
+      // reasonable number on screen, or the pool/round budget runs out. The
+      // rest still waits behind a manual "Load more" beyond that floor.
+      let cursor = 0;
+      let allScored: CandidateProject[] = [];
+      let visibleScored: CandidateProject[] = [];
+      let batchesFetched = 0;
+
+      while (
+        cursor < fetchedPool.length &&
+        batchesFetched < MAX_AUTO_SCORE_BATCHES &&
+        visibleScored.length < MIN_TOTAL_VISIBLE_TARGET
+      ) {
+        const batch = fetchedPool.slice(cursor, cursor + PAGE_SIZE);
+        batchesFetched += 1;
+
+        setLoading(
+          batchesFetched === 1
+            ? "searching projects"
+            : `searching projects (${visibleScored.length}/${MIN_TOTAL_VISIBLE_TARGET} found so far)`,
+        );
+
+        const scoredBatch = await scoreBatch(batch);
+        allScored = [...allScored, ...scoredBatch];
+        visibleScored = prepareVisibleCandidates(allScored);
+        cursor += batch.length;
+      }
 
       setCandidates(visibleScored);
-      setPoolCursor(firstBatch.length);
+      setPoolCursor(cursor);
       setSelectedCandidateId(visibleScored[0]?.id || null);
       persistHistory(
         visibleScored,
         fetchedPool,
-        firstBatch.length,
+        cursor,
         [],
         searchData.query,
       );
