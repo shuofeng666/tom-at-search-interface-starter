@@ -99,27 +99,30 @@ function sortDisplayCandidates(candidates: CandidateProject[]) {
   });
 }
 
-// Guarantee TOM is represented even when no TOM candidate cleared the normal
-// visibility bar: backfill with the best-scoring TOM candidates that aren't a
-// clear mismatch, up to MIN_GUARANTEED_TOM_VISIBLE. Never backfills with a
-// candidate flagged as a clear mismatch — a guaranteed slot still has to be a
-// plausible fit.
+// Guarantee both the TOM panel and the "other related work" panel have
+// something in them even when a group didn't clear the normal visibility
+// bar: backfill with that group's best-scoring candidates that aren't a
+// clear mismatch. Never backfills with a candidate flagged as a clear
+// mismatch — a guaranteed slot still has to be a plausible fit, and this can
+// only pull from candidates already scored in this batch, so it's a
+// best-effort floor, not an absolute guarantee.
 const MIN_GUARANTEED_TOM_VISIBLE = 2;
+const MIN_GUARANTEED_EXTERNAL_VISIBLE = 2;
 
-function prepareVisibleCandidates(scored: CandidateProject[]) {
-  const visible = scored.filter(isVisibleCandidate);
-  const visibleTomCount = visible.filter(isTomCandidate).length;
+function backfillGroup(
+  scored: CandidateProject[],
+  visible: CandidateProject[],
+  visibleIds: Set<string>,
+  isInGroup: (candidate: CandidateProject) => boolean,
+  minVisible: number,
+) {
+  const visibleCount = visible.filter(isInGroup).length;
+  if (visibleCount >= minVisible) return [];
 
-  if (visibleTomCount >= MIN_GUARANTEED_TOM_VISIBLE) {
-    return sortDisplayCandidates(visible);
-  }
-
-  const visibleIds = new Set(visible.map((candidate) => candidate.id));
-
-  const tomBackfill = scored
+  return scored
     .filter(
       (candidate) =>
-        isTomCandidate(candidate) &&
+        isInGroup(candidate) &&
         !visibleIds.has(candidate.id) &&
         !isClearlyBadMatch(candidate),
     )
@@ -127,9 +130,30 @@ function prepareVisibleCandidates(scored: CandidateProject[]) {
       (a, b) =>
         (b.evaluation?.overallScore ?? 0) - (a.evaluation?.overallScore ?? 0),
     )
-    .slice(0, MIN_GUARANTEED_TOM_VISIBLE - visibleTomCount);
+    .slice(0, minVisible - visibleCount);
+}
 
-  return sortDisplayCandidates([...visible, ...tomBackfill]);
+function prepareVisibleCandidates(scored: CandidateProject[]) {
+  const visible = scored.filter(isVisibleCandidate);
+  const visibleIds = new Set(visible.map((candidate) => candidate.id));
+
+  const tomBackfill = backfillGroup(
+    scored,
+    visible,
+    visibleIds,
+    isTomCandidate,
+    MIN_GUARANTEED_TOM_VISIBLE,
+  );
+
+  const externalBackfill = backfillGroup(
+    scored,
+    visible,
+    visibleIds,
+    (candidate) => !isTomCandidate(candidate),
+    MIN_GUARANTEED_EXTERNAL_VISIBLE,
+  );
+
+  return sortDisplayCandidates([...visible, ...tomBackfill, ...externalBackfill]);
 }
 
 function fitHeading(candidate: CandidateProject) {
