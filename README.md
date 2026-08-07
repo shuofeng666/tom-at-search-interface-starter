@@ -10,6 +10,9 @@ The interface has three practical modes:
 
 The first screen only shows an intake prompt. Internal evaluation and project cards appear after the intake is specific enough for search.
 
+Taking over this project? See [`HANDOFF.md`](./HANDOFF.md) for the
+architecture overview, deployment notes, and known rough edges.
+
 ## Setup
 
 ```bash
