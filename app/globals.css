@@ -376,9 +376,13 @@ a {
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 400px;
+  grid-template-columns: minmax(0, 1fr) 400px;
   gap: 18px;
   align-items: start;
+}
+
+.searchDirectionsRow {
+  margin: -4px 0 14px;
 }
 
 .panel {
@@ -615,7 +619,6 @@ a {
   }
 
   .detailPanel,
-  .leftPanel,
   .resultsPanel {
     width: 100%;
   }
@@ -851,14 +854,13 @@ a {
   .candidateList { column-count: 1; }
 }
 
-.resultsColumns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  align-items: start;
+.resultsStack {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
 }
 
-.resultsColumn {
+.resultsSection {
   min-width: 0;
 }
 
@@ -882,26 +884,6 @@ a {
   background: var(--soft);
   border-radius: 999px;
   padding: 2px 8px;
-}
-
-/* Two side-by-side result columns is already the split we want — cancel the
-   masonry multi-column layout inside each so cards stay single-file and
-   readable instead of splitting into 4 narrow columns. */
-.resultsColumns .candidateList {
-  column-count: 1;
-  display: grid;
-  gap: 12px;
-}
-
-.resultsEmpty {
-  color: var(--muted);
-  padding: 8px 0;
-}
-
-@media (max-width: 900px) {
-  .resultsColumns {
-    grid-template-columns: 1fr;
-  }
 }
 
 .projectCard {

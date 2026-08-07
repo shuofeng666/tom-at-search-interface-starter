@@ -154,6 +154,37 @@ function buildNoMatchRequestMailto(needProfile: NeedProfile, query: string) {
   return `mailto:${TOM_CONTACT_EMAIL}?${params.toString()}`;
 }
 
+function normalizeTitleForDedupe(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLikelyDuplicateTitle(a: string, b: string): boolean {
+  const na = normalizeTitleForDedupe(a);
+  const nb = normalizeTitleForDedupe(b);
+  if (na.length < 4 || nb.length < 4) return na === nb;
+
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+// Same solution can legitimately be both a TOM project and cross-posted to
+// e.g. Printables/Instructables — when titles match closely, keep only the
+// TOM one rather than showing the same thing twice.
+function dedupeExternalAgainstTom(
+  tomCandidates: CandidateProject[],
+  externalCandidates: CandidateProject[],
+): CandidateProject[] {
+  return externalCandidates.filter(
+    (external) =>
+      !tomCandidates.some((tom) =>
+        isLikelyDuplicateTitle(tom.title, external.title),
+      ),
+  );
+}
+
 function splitCategories(category?: string): string[] {
   if (!category) return [];
   return category
@@ -1116,8 +1147,11 @@ function ReviewScreen({
   onOpenSaved: () => void;
 }) {
   const tomCandidates = candidates.filter(isTomCandidate);
-  const externalCandidates = candidates.filter(
-    (candidate) => !isTomCandidate(candidate),
+  // If the same solution shows up both as a TOM project and as an external
+  // result (e.g. also cross-posted to Printables), keep only the TOM one.
+  const externalCandidates = dedupeExternalAgainstTom(
+    tomCandidates,
+    candidates.filter((candidate) => !isTomCandidate(candidate)),
   );
 
   const [sortMode, setSortMode] = useState<"best" | "az">("best");
@@ -1187,36 +1221,23 @@ function ReviewScreen({
       </header>
 
       <div className="workspaceGrid">
-        <aside className="panel leftPanel">
-          <h2>Need</h2>
-          <NeedProfileView profile={needProfile} />
-
-          <h3>Search directions</h3>
-          <div className="chips">
-            {needProfile.searchDirections.map((direction) => (
-              <button
-                key={direction}
-                className="chipButton"
-                onClick={() => runSearch(direction)}
-              >
-                {direction}
-              </button>
-            ))}
-          </div>
-
-          {query && (
-            <p className="small">
-              <b>Last query:</b> {query}
-            </p>
-          )}
-        </aside>
-
         <section className="panel resultsPanel">
           <h2>Related projects</h2>
-          <p className="small resultsHint">
-            TOM projects on the left, other related work on the right. Tap a
-            card for details.
-          </p>
+          <p className="small resultsHint">Tap a card for details.</p>
+
+          {needProfile.searchDirections.length > 0 && (
+            <div className="chips searchDirectionsRow">
+              {needProfile.searchDirections.map((direction) => (
+                <button
+                  key={direction}
+                  className="chipButton"
+                  onClick={() => runSearch(direction)}
+                >
+                  {direction}
+                </button>
+              ))}
+            </div>
+          )}
 
           {tomCandidates.length === 0 && externalCandidates.length === 0 && (
             <div className="noMatchBanner">
@@ -1282,8 +1303,8 @@ function ReviewScreen({
             )}
           </div>
 
-          <div className="resultsColumns">
-            <div className="resultsColumn">
+          <div className="resultsStack">
+            <div className="resultsSection">
               <h3 className="resultsColumnTitle">
                 TOM projects
                 {tomCatalogSnapshotDate && (
@@ -1292,9 +1313,9 @@ function ReviewScreen({
                   </span>
                 )}
               </h3>
-              <div className="candidateList">
-                {visibleTomCandidates.length ? (
-                  visibleTomCandidates.map((candidate) => (
+              {visibleTomCandidates.length > 0 && (
+                <div className="candidateList">
+                  {visibleTomCandidates.map((candidate) => (
                     <CandidateRow
                       key={candidate.id}
                       candidate={candidate}
@@ -1303,22 +1324,16 @@ function ReviewScreen({
                       onSelect={() => setSelectedCandidateId(candidate.id)}
                       onToggleComparison={() => toggleComparison(candidate)}
                     />
-                  ))
-                ) : (
-                  <p className="small resultsEmpty">
-                    {tomCandidates.length
-                      ? "No TOM projects match this filter."
-                      : "No TOM projects matched yet."}
-                  </p>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="resultsColumn">
+            <div className="resultsSection">
               <h3 className="resultsColumnTitle">Other related work</h3>
-              <div className="candidateList">
-                {visibleExternalCandidates.length ? (
-                  visibleExternalCandidates.map((candidate) => (
+              {visibleExternalCandidates.length > 0 && (
+                <div className="candidateList">
+                  {visibleExternalCandidates.map((candidate) => (
                     <CandidateRow
                       key={candidate.id}
                       candidate={candidate}
@@ -1327,15 +1342,9 @@ function ReviewScreen({
                       onSelect={() => setSelectedCandidateId(candidate.id)}
                       onToggleComparison={() => toggleComparison(candidate)}
                     />
-                  ))
-                ) : (
-                  <p className="small resultsEmpty">
-                    {externalCandidates.length
-                      ? "No other related work matches this filter."
-                      : "No other related work matched yet."}
-                  </p>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
