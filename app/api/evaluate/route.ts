@@ -38,7 +38,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const scored = await evaluateCandidates({ needProfile, candidates });
+    // Score the whole page in one parallel round instead of sequential
+    // batches of 5 — the frontend already caps how many candidates land
+    // here per call (PAGE_SIZE), so this doesn't change total Gemini load,
+    // just how many rounds it takes. Halves per-page latency, which matters
+    // now that search speed is a direct complaint.
+    const scored = await evaluateCandidates({
+      needProfile,
+      candidates,
+      batchSize: candidates.length
+    });
 
     return NextResponse.json({ candidates: scored } satisfies EvaluateResponse);
   } catch (error) {

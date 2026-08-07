@@ -32,14 +32,15 @@ type SearchPoolResponse = {
 const PAGE_SIZE = 10;
 
 // A search should land with a reasonable number of results, not whatever
-// happened to clear the bar in a single batch. Auto-score further pages
-// until this many are visible, capped so a genuinely weak pool doesn't spin
-// forever burning Gemini calls. TOM has its own floor within that total —
-// this is TOM's own search interface, so "8 total but only 1 is TOM" isn't
-// good enough.
-const MIN_TOTAL_VISIBLE_TARGET = 8;
+// happened to clear the bar in a single batch — but scoring each extra page
+// costs real time (a full round of Gemini calls), and "search is slow" is a
+// direct complaint, so this is deliberately a modest floor, not a generous
+// one. TOM has its own floor within the total — this is TOM's own search
+// interface, so "6 total but only 1 is TOM" isn't good enough — but capped
+// at 2 rounds so a weak pool can't turn into 4 rounds of waiting.
+const MIN_TOTAL_VISIBLE_TARGET = 6;
 const MIN_TOM_VISIBLE_TARGET = 4;
-const MAX_AUTO_SCORE_BATCHES = 4;
+const MAX_AUTO_SCORE_BATCHES = 2;
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
