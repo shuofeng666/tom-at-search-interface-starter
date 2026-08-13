@@ -2004,10 +2004,6 @@ function CandidateDetail({
           <b>Cost</b>
           <span>{costLabel(candidate)}</span>
         </div>
-        <div className="detailStat">
-          <b>Needs TOM team?</b>
-          <span>{needsTeam}</span>
-        </div>
       </div>
 
       {(needsTeam === "Yes" || needsTeam === "Maybe") && (
