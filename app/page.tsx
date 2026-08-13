@@ -550,6 +550,47 @@ export default function Home() {
     );
   }
 
+  // Same total wait as scoreBatch (TOM and external candidates are still
+  // scored in parallel, not sequentially), but reveals them as a TOM group
+  // first, then an external group — instead of whichever individual
+  // candidate happens to finish first. External candidates that finish
+  // scoring while TOM ones are still pending are held back and released
+  // together the moment the last TOM candidate in this batch lands.
+  async function scoreBatchTomFirst(
+    batch: CandidateProject[],
+    onReveal: (revealed: CandidateProject[]) => void,
+  ): Promise<CandidateProject[]> {
+    const tomBatch = batch.filter(isTomCandidate);
+    const externalBatch = batch.filter((candidate) => !isTomCandidate(candidate));
+
+    let tomRemaining = tomBatch.length;
+    let pendingExternal: CandidateProject[] = [];
+
+    const releasePending = () => {
+      if (!pendingExternal.length) return;
+      const released = pendingExternal;
+      pendingExternal = [];
+      onReveal(released);
+    };
+
+    const [tomScored, externalScored] = await Promise.all([
+      scoreBatch(tomBatch, (candidate) => {
+        tomRemaining -= 1;
+        onReveal([candidate]);
+        if (tomRemaining <= 0) releasePending();
+      }),
+      scoreBatch(externalBatch, (candidate) => {
+        if (tomRemaining > 0) {
+          pendingExternal.push(candidate);
+        } else {
+          onReveal([candidate]);
+        }
+      }),
+    ]);
+
+    return [...tomScored, ...externalScored];
+  }
+
   // Fire-and-forget: look up real photos only for the TOM candidates that
   // actually made it on screen (not the whole search pool — see lib/tom.ts).
   // Candidates render immediately without waiting on this; images pop in
@@ -681,8 +722,8 @@ export default function Home() {
             : `searching projects (${visibleScored.filter(isTomCandidate).length}/${MIN_TOM_VISIBLE_TARGET} TOM, ${visibleScored.length}/${MIN_TOTAL_VISIBLE_TARGET} total so far)`,
         );
 
-        await scoreBatch(batch, (scoredCandidate) => {
-          allScored = [...allScored, scoredCandidate];
+        await scoreBatchTomFirst(batch, (revealed) => {
+          allScored = [...allScored, ...revealed];
           visibleScored = prepareVisibleCandidates(allScored);
           setCandidates(visibleScored);
           setSelectedCandidateId((current) => current ?? visibleScored[0]?.id ?? null);
@@ -724,8 +765,8 @@ export default function Home() {
       const existing = candidates;
       let batchScored: CandidateProject[] = [];
 
-      const scored = await scoreBatch(nextBatch, (scoredCandidate) => {
-        batchScored = [...batchScored, scoredCandidate];
+      const scored = await scoreBatchTomFirst(nextBatch, (revealed) => {
+        batchScored = [...batchScored, ...revealed];
         const visibleSoFar = prepareVisibleCandidates(batchScored);
         setCandidates(sortDisplayCandidates([...existing, ...visibleSoFar]));
       });
