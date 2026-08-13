@@ -37,8 +37,11 @@ IntakeScreen  --/api/intake-chat-->  NeedProfile (client state)
      v  "search related projects"
 ReviewScreen  --/api/search-->  { pool: CandidateProject[] (unscored), tomCatalogSnapshotDate }
      |
-     v  frontend scores the pool in pages (PAGE_SIZE = 10)
-     --/api/evaluate--> scored CandidateProject[] for that page
+     v  frontend takes a page of the pool (PAGE_SIZE = 10), scores each
+     |  candidate with its OWN /api/evaluate call (all fired in parallel),
+     |  and renders each card the moment its own call resolves — see
+     |  scoreBatch/scoreBatchTomFirst in app/page.tsx
+     --/api/evaluate (x N, one per candidate)--> scored CandidateProject
      |
      v  (loop) keep scoring more pages until enough clear the visibility bar
      --/api/tom-images--> photos for the TOM candidates about to be shown
@@ -47,13 +50,28 @@ ReviewScreen  --/api/search-->  { pool: CandidateProject[] (unscored), tomCatalo
 OutputScreen  --/api/review-summary-->  ReviewSummary
 ```
 
-Two things are deliberately **not** in one request:
+Three things are deliberately **not** done the "obvious" way:
 
 - **Fetching and scoring are separate** (`/api/search` just fetches;
   `/api/evaluate` scores). Scoring via Gemini is the slow part, so the
   frontend only scores as many candidates as it needs to fill the screen,
   and "Load more" scores another page on demand instead of scoring
   everything up front.
+- **Scoring is one Gemini call per candidate, not one call for a whole
+  page.** `/api/evaluate` can score an array, but the frontend always
+  calls it with a single candidate (`scoreBatch` in `app/page.tsx`) and
+  fires all of them in parallel — same total Gemini load and same total
+  wait for the full page as one batched call, but each card can render
+  the moment its own call resolves instead of the whole page blocking on
+  the single slowest candidate. `scoreBatchTomFirst` builds on this: TOM
+  and external candidates in a page still score fully in parallel, but any
+  external candidate that finishes before the TOM group is done gets held
+  back and released together right after the last TOM candidate lands —
+  so results still stream in progressively, just as a TOM-group-then-
+  external sequence rather than a random interleave. This is also where
+  the `cardEnter` CSS animation in `globals.css` comes in: since React
+  keeps the same DOM node for a candidate across re-sorts (matching key),
+  the fade/rise-in only plays once, on a card's real first appearance.
 - **TOM search and TOM images are separate** (`lib/tom.ts`'s
   `searchTomProjects` vs. `attachTomImages`, called from
   `/api/tom-images`). Search/ranking is 100% local (the CSV), so it's fast
@@ -154,6 +172,40 @@ only persistence is client-side (`localStorage`, see below).
   `MIN_TOTAL_VISIBLE_TARGET` further, or reducing `PAGE_SIZE` (Gemini
   scoring is parallel within a page, so a smaller page returns faster but
   needs more "Load more" round trips).
+  - Total backend time is only half the story — actual per-candidate
+    Gemini scoring calls are the slow part (each one generates a fairly
+    large structured JSON with 7 scored dimensions + explanations +
+    evidence), and there wasn't much room left to cut that without hurting
+    scoring quality. The bigger win ended up being perceived speed, not
+    raw speed: `scoreBatch`/`scoreBatchTomFirst` in `app/page.tsx` render
+    each card as its own `/api/evaluate` call resolves instead of blocking
+    on the whole page, cutting time-to-first-card roughly in half in
+    production testing even though total page time was unchanged. If
+    speed complaints come back, look at shortening the evaluation prompt's
+    output (fewer/shorter `evidence` array items, in `lib/evaluate.ts`)
+    before reaching for a faster/cheaper model — a model swap risks
+    scoring quality and hasn't been tested.
+- **Intake question quality is an ongoing prompt-tuning target, not a
+  one-time fix.** Stakeholders complained the first-screen follow-up
+  questions felt too broad/generic. Testing against production with real
+  openers ("I need a cup holder for my wheelchair", etc.) found a clear,
+  reproducible failure mode: the model kept joining two different
+  questions into one sentence with "and"/"or" (e.g. "What activity do you
+  need the key for, and what would make it easier for you?") — a compound
+  question reads as vague even though it's grammatically one sentence, and
+  the user can't actually answer both halves at once. Fixed with an
+  explicit rule + bad/good examples in `/api/intake-chat`'s system prompt
+  (`buildSystemPrompt` in `app/api/intake-chat/route.ts`), plus a rule
+  against asking WHY (cause/diagnosis) before WHAT (the barrier itself).
+  Verified with ~20 real test conversations post-fix, but this is prompt
+  behavior, not a hard guarantee — an LLM can still occasionally slip back
+  into old patterns (seen once in ~20 samples during testing), and a
+  future model swap could reintroduce it entirely. If this complaint comes
+  back, test with real openers against production first (like this round
+  did) to find the actual reproducible pattern before changing the prompt
+  again — guessing at what "feels broad" without a concrete failing
+  example tends to produce vague prompt tweaks that don't reliably fix
+  anything.
 - **TOM vs. external dedupe is title-similarity only** (see
   `isLikelyDuplicateTitle` in `app/page.tsx`) — it substring-matches
   normalized titles. It's deliberately conservative (won't hide an
