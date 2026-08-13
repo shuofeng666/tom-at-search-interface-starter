@@ -76,8 +76,10 @@ Two things are deliberately **not** in one request:
   supplement): Exa API (`lib/exa.ts`, `EXA_API_KEY`), one call per
   configured domain, interleaved so no single domain dominates the pool.
 - **TOM photos only** (not search): TOM's live project API, if
-  `TOM_SEARCH_API_URL` is set. Optional — without it, TOM cards just show
-  no photo. See `lib/tom.ts`'s `attachTomImages`.
+  `TOM_SEARCH_API_URL` is set. Technically optional (the app still runs
+  without it), but treat it as required — without it TOM cards silently
+  show no photo, with nothing in the UI to explain why. See `lib/tom.ts`'s
+  `attachTomImages`, and "Known issues" below.
 - **Scoring, chat, and summaries**: Gemini (`GEMINI_API_KEY`,
   `GEMINI_MODEL`, default `gemini-2.5-flash`) via `lib/gemini.ts`.
 
@@ -104,6 +106,30 @@ only persistence is client-side (`localStorage`, see below).
 
 ## Known issues / tuning knobs
 
+- **"TOM images are missing" has two completely different causes — check
+  both.** This came up repeatedly and cost a lot of back-and-forth before
+  the actual cause was found, so future-you should check both possibilities
+  immediately instead of re-diagnosing from scratch:
+  1. *Config*: `TOM_SEARCH_API_URL` isn't set (or isn't set on the specific
+     deployment being tested) in the hosting platform's dashboard. This is
+     what actually happened in production — the variable was simply
+     missing, so `attachTomImages` was silently taking its no-op path the
+     entire time. No error anywhere; the code was never the problem. Adding
+     the variable requires a fresh deploy to take effect — saving it alone
+     does not update a deployment that's already running. Confirmed via
+     `curl -X POST <deployment>/api/tom-images` with a real TOM id/title
+     (see `data/tom-solutions.csv` for real ones) — empty `results: []`
+     back in well under a second is the signature of the no-op path (a real
+     per-candidate network lookup takes noticeably longer and varies more).
+  2. *Code*: the image-search API call used to pass `selectedTypes=5`
+     (TOM's "product" project type), which silently excluded most of the
+     catalog — a large share of TOM projects are other types (concepts,
+     works, prototypes) that filter permanently hid, no matter how exact
+     the title match was. Already fixed (removed in `fetchTomProjectImages`
+     in `lib/tom.ts`), verified against TOM's real API across a random CSV
+     sample (~28% exact-match hit rate with the filter, ~97% without). If
+     images go missing again, rule out cause 1 first — it's the faster
+     check and it's what actually happened last time.
 - **Serverless function timeouts are the main failure mode to watch for.**
   The single biggest bug fixed during this internship was TOM photos
   silently disappearing because an earlier version fetched images for the

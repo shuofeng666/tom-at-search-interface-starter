@@ -45,8 +45,14 @@ that date next to the TOM results so staff know how fresh the data is.
 
 The CSV export has no image columns. If `TOM_SEARCH_API_URL` is set, TOM
 cards fetch their real photos (all of them, not just one) from that live
-endpoint — this is used only for photos, never for search/ranking, so it's
-optional; without it TOM cards just show no photo.
+endpoint — this is used only for photos, never for search/ranking, so the
+app still runs without it; without it TOM cards just show no photo.
+
+**Make sure this is actually set in every deployment.** It was missing
+from production for a long stretch and the symptom looked like a code
+bug (TOM cards silently had no photos) rather than a missing config
+value — see `.env.example` for the value and `HANDOFF.md` for the full
+story.
 
 ### "Request TOM team help"
 
