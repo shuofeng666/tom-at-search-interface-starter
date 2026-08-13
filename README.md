@@ -54,10 +54,14 @@ bug (TOM cards silently had no photos) rather than a missing config
 value — see `.env.example` for the value and `HANDOFF.md` for the full
 story.
 
-### "Request TOM team help"
+### "Download TOM request"
 
 Candidates whose evaluation pathway suggests TOM staff involvement (needs
 adaptation, maker team review, possible new TOM challenge, or needs more
-information) show a "Request TOM team help" button that opens a pre-filled
-email. Set `NEXT_PUBLIC_TOM_CONTACT_EMAIL` to the real inbox that should
-receive these.
+information) show a "Download TOM request (.txt)" button. It downloads a
+plain-text report (full need profile + the candidate's fit assessment)
+instead of opening a `mailto:` link — mailto depends on the browser having
+a default mail app configured, which often isn't true on shared/work
+computers, so it silently does nothing there. The downloaded file can be
+attached to an email, pasted into Slack, or added to a ticket, whatever
+the reviewer's actual workflow is.

@@ -1014,14 +1014,17 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  border: none;
   border-radius: 999px;
   padding: 6px 12px;
   margin-bottom: 12px;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
   color: #92400e;
   background: #fef3c7;
   text-decoration: none;
+  cursor: pointer;
 }
 .requestHelpBtn:hover {
   background: #fde68a;

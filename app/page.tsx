@@ -93,15 +93,10 @@ function needsTomTeamLabel(candidate: CandidateProject) {
   }
 }
 
-// Configure via NEXT_PUBLIC_TOM_CONTACT_EMAIL. Falls back to a placeholder
-// so the button still works (just visibly not a real address) if unset.
-const TOM_CONTACT_EMAIL =
-  process.env.NEXT_PUBLIC_TOM_CONTACT_EMAIL || "help@tomglobal.org";
-
 // Every field TOM staff would otherwise have to click into the app to see —
 // this is meant to work as a standalone report, not just a pointer back to
-// the tool, since the point is giving them enough context in the email
-// itself. Empty/"not applicable" fields are skipped rather than shown blank.
+// the tool, since the point is giving them enough context without it. Empty/
+// "not applicable" fields are skipped rather than shown blank.
 function buildNeedSummaryLines(needProfile: NeedProfile): string[] {
   const location = [needProfile.location?.cityOrRegion, needProfile.location?.country]
     .filter(Boolean)
@@ -145,25 +140,23 @@ function buildEvaluationSummaryLines(candidate: CandidateProject): string[] {
   ].filter((line) => line !== "");
 }
 
-// Mailto bodies can silently fail to open (or get truncated) past a few
-// thousand characters in some mail clients, so cap it defensively rather
-// than trust every upstream field to stay short.
-const MAILTO_BODY_MAX_LENGTH = 6000;
-
-function buildTomTeamRequestMailto(
+// A plain-text report the user downloads and sends however they like
+// (email, Slack, pasted into a ticket) — not a mailto link, since that
+// depends on the browser having a default mail app configured, which often
+// isn't true on shared/work computers and just silently does nothing.
+//
+// Each section's own lines are filtered for emptiness independently, then
+// sections are joined with a blank line between them — filtering the whole
+// thing at once would eat the intentional blank-line separators along with
+// the genuinely empty computed fields.
+function buildTomTeamReportText(
   candidate: CandidateProject,
   needProfile: NeedProfile,
-) {
-  const subject = `TOM team review request: ${candidate.title}`;
-
-  // Each section's own lines are filtered for emptiness independently, then
-  // sections are joined with a blank line between them — filtering the
-  // whole thing at once would eat the intentional blank-line separators
-  // along with the genuinely empty computed fields.
+): string {
   const sections: string[][] = [
     [
-      `A search turned up a possible match that needs TOM's help to evaluate or`,
-      `adapt. Full context below so you don't have to dig for it in the app.`,
+      `TOM team review request: ${candidate.title}`,
+      `A search turned up a possible match that needs TOM's help to evaluate or adapt.`,
     ],
     [`=== Need ===`, ...buildNeedSummaryLines(needProfile)],
     [
@@ -179,17 +172,35 @@ function buildTomTeamRequestMailto(
     ],
   ];
 
-  let body = sections
+  return sections
     .map((section) => section.filter((line) => line !== "").join("\n"))
     .filter((section) => section !== "")
     .join("\n\n");
+}
 
-  if (body.length > MAILTO_BODY_MAX_LENGTH) {
-    body = `${body.slice(0, MAILTO_BODY_MAX_LENGTH)}\n\n[Report truncated — open the project in the app for full detail: ${candidate.url}]`;
-  }
+function buildTomTeamReportFilename(candidate: CandidateProject): string {
+  const slug =
+    candidate.title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "project";
 
-  const params = new URLSearchParams({ subject, body });
-  return `mailto:${TOM_CONTACT_EMAIL}?${params.toString()}`;
+  return `tom-request-${slug}.txt`;
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  URL.revokeObjectURL(url);
 }
 
 function normalizeTitleForDedupe(title: string): string {
@@ -2062,12 +2073,18 @@ function CandidateDetail({
       </div>
 
       {(needsTeam === "Yes" || needsTeam === "Maybe") && (
-        <a
+        <button
+          type="button"
           className="requestHelpBtn"
-          href={buildTomTeamRequestMailto(candidate, needProfile)}
+          onClick={() =>
+            downloadTextFile(
+              buildTomTeamReportFilename(candidate),
+              buildTomTeamReportText(candidate, needProfile),
+            )
+          }
         >
-          Request TOM team help ✉
-        </a>
+          Download TOM request (.txt)
+        </button>
       )}
 
       <ChipRow
@@ -2256,12 +2273,18 @@ function UserFacingCard({
         </a>
 
         {(needsTeam === "Yes" || needsTeam === "Maybe") && (
-          <a
+          <button
+            type="button"
             className="requestHelpBtn"
-            href={buildTomTeamRequestMailto(candidate, needProfile)}
+            onClick={() =>
+              downloadTextFile(
+                buildTomTeamReportFilename(candidate),
+                buildTomTeamReportText(candidate, needProfile),
+              )
+            }
           >
-            Request TOM team help ✉
-          </a>
+            Download TOM request (.txt)
+          </button>
         )}
       </div>
     </article>
