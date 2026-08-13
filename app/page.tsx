@@ -523,19 +523,31 @@ export default function Home() {
     }
   }
   // Score a batch of already-fetched candidates via the on-demand evaluate route.
+  // Score one candidate per request (instead of one request for the whole
+  // page) so results can render as each finishes, rather than all-at-once
+  // after the slowest one lands. Same total Gemini load, same total wait for
+  // the full page — the point is that `onScored` lets the caller show each
+  // card the moment it's ready instead of blocking on Promise.all.
   async function scoreBatch(
     batch: CandidateProject[],
+    onScored?: (candidate: CandidateProject) => void,
   ): Promise<CandidateProject[]> {
-    const res = await fetch("/api/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ needProfile, candidates: batch }),
-    });
+    return Promise.all(
+      batch.map(async (candidate) => {
+        const res = await fetch("/api/evaluate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ needProfile, candidates: [candidate] }),
+        });
 
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Evaluation failed.");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Evaluation failed.");
 
-    return (data.candidates || []) as CandidateProject[];
+        const scored = ((data.candidates || []) as CandidateProject[])[0] || candidate;
+        onScored?.(scored);
+        return scored;
+      }),
+    );
   }
 
   // Fire-and-forget: look up real photos only for the TOM candidates that
@@ -669,15 +681,18 @@ export default function Home() {
             : `searching projects (${visibleScored.filter(isTomCandidate).length}/${MIN_TOM_VISIBLE_TARGET} TOM, ${visibleScored.length}/${MIN_TOTAL_VISIBLE_TARGET} total so far)`,
         );
 
-        const scoredBatch = await scoreBatch(batch);
-        allScored = [...allScored, ...scoredBatch];
-        visibleScored = prepareVisibleCandidates(allScored);
+        await scoreBatch(batch, (scoredCandidate) => {
+          allScored = [...allScored, scoredCandidate];
+          visibleScored = prepareVisibleCandidates(allScored);
+          setCandidates(visibleScored);
+          setSelectedCandidateId((current) => current ?? visibleScored[0]?.id ?? null);
+        });
         cursor += batch.length;
       }
 
       setCandidates(visibleScored);
       setPoolCursor(cursor);
-      setSelectedCandidateId(visibleScored[0]?.id || null);
+      setSelectedCandidateId((current) => current ?? visibleScored[0]?.id ?? null);
       enrichTomImages(visibleScored);
       persistHistory(
         visibleScored,
@@ -706,10 +721,18 @@ export default function Home() {
 
     try {
       const nextBatch = pool.slice(poolCursor, poolCursor + PAGE_SIZE);
-      const scored = await scoreBatch(nextBatch);
+      const existing = candidates;
+      let batchScored: CandidateProject[] = [];
+
+      const scored = await scoreBatch(nextBatch, (scoredCandidate) => {
+        batchScored = [...batchScored, scoredCandidate];
+        const visibleSoFar = prepareVisibleCandidates(batchScored);
+        setCandidates(sortDisplayCandidates([...existing, ...visibleSoFar]));
+      });
+
       const visibleScored = prepareVisibleCandidates(scored);
       const mergedCandidates = sortDisplayCandidates([
-        ...candidates,
+        ...existing,
         ...visibleScored,
       ]);
       const nextPoolCursor = poolCursor + nextBatch.length;
