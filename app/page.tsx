@@ -137,24 +137,6 @@ function buildTomTeamRequestMailto(
   return `mailto:${TOM_CONTACT_EMAIL}?${params.toString()}`;
 }
 
-function buildNoMatchRequestMailto(needProfile: NeedProfile, query: string) {
-  const subject = `TOM team help needed: no existing solution found`;
-
-  const body = [
-    `A search did not turn up a strong existing match — this may be a good`,
-    `candidate for TOM to look into directly, or a possible new TOM challenge.`,
-    ``,
-    ...buildNeedSummaryLines(needProfile),
-    ``,
-    query ? `Search terms used: ${query}` : "",
-  ]
-    .filter((line) => line !== "")
-    .join("\n");
-
-  const params = new URLSearchParams({ subject, body });
-  return `mailto:${TOM_CONTACT_EMAIL}?${params.toString()}`;
-}
-
 function normalizeTitleForDedupe(title: string): string {
   return title
     .toLowerCase()
@@ -1237,21 +1219,6 @@ function ReviewScreen({
                   {direction}
                 </button>
               ))}
-            </div>
-          )}
-
-          {tomCandidates.length === 0 && externalCandidates.length === 0 && (
-            <div className="noMatchBanner">
-              <p>
-                No strong matches yet for this need — this could be a good
-                candidate for TOM to look into directly.
-              </p>
-              <a
-                className="requestHelpBtn"
-                href={buildNoMatchRequestMailto(needProfile, query)}
-              >
-                Request TOM team help ✉
-              </a>
             </div>
           )}
 
