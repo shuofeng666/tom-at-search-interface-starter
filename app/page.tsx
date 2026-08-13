@@ -98,21 +98,57 @@ function needsTomTeamLabel(candidate: CandidateProject) {
 const TOM_CONTACT_EMAIL =
   process.env.NEXT_PUBLIC_TOM_CONTACT_EMAIL || "help@tomglobal.org";
 
+// Every field TOM staff would otherwise have to click into the app to see —
+// this is meant to work as a standalone report, not just a pointer back to
+// the tool, since the point is giving them enough context in the email
+// itself. Empty/"not applicable" fields are skipped rather than shown blank.
 function buildNeedSummaryLines(needProfile: NeedProfile): string[] {
   const location = [needProfile.location?.cityOrRegion, needProfile.location?.country]
     .filter(Boolean)
     .join(", ");
 
+  const listField = (label: string, values: string[]) =>
+    values.length ? `${label}: ${values.join("; ")}` : "";
+
   return [
-    `Need: ${needProfile.activity}`,
+    `Activity: ${needProfile.activity}`,
     `Problem: ${needProfile.problem}`,
     `Desired outcome: ${needProfile.desiredOutcome}`,
     [needProfile.userAge, needProfile.seekerRole].filter(Boolean).length
       ? `Age / role: ${[needProfile.userAge, needProfile.seekerRole].filter(Boolean).join(" / ")}`
       : "",
     location ? `Location: ${location}` : "",
+    listField("Body function", needProfile.bodyFunction),
+    listField("Current devices", needProfile.currentDevices),
+    listField("Environment", needProfile.environment),
+    listField("Must have", needProfile.mustHave),
+    listField("Must avoid", needProfile.mustAvoid),
+    listField("Safety concerns", needProfile.safetyConcerns),
+    listField("Preferences", needProfile.preferences),
   ].filter((line) => line !== "");
 }
+
+function buildEvaluationSummaryLines(candidate: CandidateProject): string[] {
+  const evaluation = candidate.evaluation;
+  if (!evaluation) return [];
+
+  const listField = (label: string, values: string[]) =>
+    values.length ? `${label}: ${values.join("; ")}` : "";
+
+  return [
+    `Overall fit score: ${evaluation.overallScore.toFixed(1)}/3`,
+    listField("Matches", evaluation.matchedCriteria),
+    listField("Gaps / mismatches", evaluation.unmatchedCriteria),
+    listField("Missing information", evaluation.missingInformation),
+    listField("Risk flags", evaluation.riskFlags),
+    `Cost: ${costLabel(candidate)}`,
+  ].filter((line) => line !== "");
+}
+
+// Mailto bodies can silently fail to open (or get truncated) past a few
+// thousand characters in some mail clients, so cap it defensively rather
+// than trust every upstream field to stay short.
+const MAILTO_BODY_MAX_LENGTH = 6000;
 
 function buildTomTeamRequestMailto(
   candidate: CandidateProject,
@@ -120,18 +156,37 @@ function buildTomTeamRequestMailto(
 ) {
   const subject = `TOM team review request: ${candidate.title}`;
 
-  const body = [
-    `A search turned up a possible match that needs TOM's help to evaluate or adapt.`,
-    ``,
-    `Project: ${candidate.title}`,
-    `Link: ${candidate.url}`,
-    ``,
-    ...buildNeedSummaryLines(needProfile),
-    ``,
-    `Why this needs TOM: ${candidate.evaluation?.pathwayReason || "See fit assessment on the project page."}`,
-  ]
-    .filter((line) => line !== "")
-    .join("\n");
+  // Each section's own lines are filtered for emptiness independently, then
+  // sections are joined with a blank line between them — filtering the
+  // whole thing at once would eat the intentional blank-line separators
+  // along with the genuinely empty computed fields.
+  const sections: string[][] = [
+    [
+      `A search turned up a possible match that needs TOM's help to evaluate or`,
+      `adapt. Full context below so you don't have to dig for it in the app.`,
+    ],
+    [`=== Need ===`, ...buildNeedSummaryLines(needProfile)],
+    [
+      `=== Project ===`,
+      `Project: ${candidate.title}`,
+      `Link: ${candidate.url}`,
+      `Source: ${formatSourceLabel(candidate.source)} (${candidate.sourceType})`,
+    ],
+    [
+      `=== Fit assessment ===`,
+      ...buildEvaluationSummaryLines(candidate),
+      `Why this needs TOM: ${candidate.evaluation?.pathwayReason || "See fit assessment on the project page."}`,
+    ],
+  ];
+
+  let body = sections
+    .map((section) => section.filter((line) => line !== "").join("\n"))
+    .filter((section) => section !== "")
+    .join("\n\n");
+
+  if (body.length > MAILTO_BODY_MAX_LENGTH) {
+    body = `${body.slice(0, MAILTO_BODY_MAX_LENGTH)}\n\n[Report truncated — open the project in the app for full detail: ${candidate.url}]`;
+  }
 
   const params = new URLSearchParams({ subject, body });
   return `mailto:${TOM_CONTACT_EMAIL}?${params.toString()}`;
