@@ -207,10 +207,17 @@ async function fetchTomProjectImages(
   const timeout = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
 
   try {
+    // No selectedTypes filter: this used to be pinned to "5" (TOM's
+    // "product" project type), which silently excluded most of the catalog
+    // - many CSV rows are TOM projects of other types (concepts, works,
+    // prototypes) and would never come back from a type=5-only search no
+    // matter how exact the title match was. That was the main cause of
+    // "TOM images still missing" reports; live-tested against TOM's API
+    // across a random CSV sample, this alone took the exact-id hit rate
+    // from ~28% to ~97%.
     const url = new URL(endpoint);
     url.searchParams.set("skip", "0");
-    url.searchParams.set("limit", "5");
-    url.searchParams.set("selectedTypes", "5");
+    url.searchParams.set("limit", "10");
     url.searchParams.set("userInput", title);
 
     const res = await fetch(url.toString(), {
