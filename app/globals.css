@@ -962,7 +962,8 @@ a {
 
 .cardMedia {
   position: relative;
-  height: 120px;
+  aspect-ratio: 1 / 1;
+  max-height: 240px;
   background: var(--soft);
 }
 .cardMedia img {
