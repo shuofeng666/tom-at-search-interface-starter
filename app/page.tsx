@@ -990,7 +990,7 @@ function IntakeScreen({
       <section className="landing">
         <div className="promptShell">
           <div className="promptLabelRow">
-            <div className="promptLabel">TOM</div>
+            <img className="promptLabel" src="/tom-logo.png" alt="Tikkun Olam Makers" />
 
             {(historyCount > 0 || savedCount > 0) && (
               <div className="promptLabelActions">
@@ -1041,7 +1041,7 @@ function IntakeScreen({
             Saved ({savedCount})
           </button>
         </div>
-        <span>TOM</span>
+        <img className="miniHeaderLogo" src="/tom-logo.png" alt="Tikkun Olam Makers" />
       </div>
 
       <div className="chatWindow">
