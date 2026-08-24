@@ -954,6 +954,87 @@ function hasUsableSearchSeed(profile: NeedProfile) {
   return Boolean(hasActivity && hasProblem);
 }
 
+// Minimal typing for the Web Speech API's SpeechRecognition - not in every
+// TS lib.dom version, and only implemented (as webkitSpeechRecognition) in
+// Chrome/Edge, not Firefox/Safari. Chrome/Edge/Safari (recent versions) do
+// support it, Firefox doesn't - hence the feature-detect rather than
+// assuming it exists.
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: SpeechRecognitionResultLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+};
+type SpeechRecognitionResultLike = {
+  results: { [index: number]: { [index: number]: { transcript: string } } };
+};
+
+function getSpeechRecognitionCtor(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === "undefined") return null;
+
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
+// Dictation, not a live conversation: press the mic, say one thing, it gets
+// transcribed into the text field for the user to review/edit before
+// sending - not real-time speech-to-speech. `interimResults: false` means
+// one final transcript per press rather than words streaming in live.
+//
+// Support is checked in an effect (not at render time) so server-rendered
+// HTML and the first client render both start from "unsupported" - matching
+// them avoids a hydration mismatch, and the mic button then appears a beat
+// later on browsers that actually support it.
+function useSpeechDictation(onResult: (text: string) => void) {
+  const [isSupported, setIsSupported] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  useEffect(() => {
+    setIsSupported(getSpeechRecognitionCtor() !== null);
+  }, []);
+
+  function start() {
+    if (isListening) return;
+
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) return;
+
+    const recognition = new Ctor();
+    recognition.lang =
+      typeof navigator !== "undefined" && navigator.language
+        ? navigator.language
+        : "en-US";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0]?.[0]?.transcript;
+      if (transcript) onResult(transcript);
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    setIsListening(true);
+    recognition.start();
+  }
+
+  function stop() {
+    recognitionRef.current?.stop();
+  }
+
+  return { isSupported, isListening, start, stop };
+}
+
 function IntakeScreen({
   messages,
   draft,
@@ -972,7 +1053,7 @@ function IntakeScreen({
 }: {
   messages: ChatMessage[];
   draft: string;
-  setDraft: (value: string) => void;
+  setDraft: (value: string | ((previous: string) => string)) => void;
   onSubmit: (content?: string) => void;
   readyForSearch: boolean;
   handoffReason: string;
@@ -989,6 +1070,12 @@ function IntakeScreen({
     event.preventDefault();
     onSubmit();
   }
+
+  const dictation = useSpeechDictation((transcript) => {
+    setDraft((previous) =>
+      previous.trim() ? `${previous.trim()} ${transcript}` : transcript,
+    );
+  });
 
   const chatMessagesRef = useRef<HTMLDivElement>(null);
 
@@ -1039,6 +1126,22 @@ function IntakeScreen({
             />
 
             <div className="heroActions">
+              {dictation.isSupported && (
+                <button
+                  type="button"
+                  className={`micBtn${dictation.isListening ? " listening" : ""}`}
+                  onClick={dictation.isListening ? dictation.stop : dictation.start}
+                  aria-pressed={dictation.isListening}
+                  aria-label={
+                    dictation.isListening ? "Stop voice input" : "Start voice input"
+                  }
+                  title={
+                    dictation.isListening ? "Stop voice input" : "Start voice input"
+                  }
+                >
+                  {dictation.isListening ? "● Listening…" : "🎤"}
+                </button>
+              )}
               <button type="submit" className="sendBtn">
                 Start
               </button>
@@ -1100,6 +1203,22 @@ function IntakeScreen({
           />
 
           <div className="inputActions">
+            {dictation.isSupported && (
+              <button
+                type="button"
+                className={`micBtn${dictation.isListening ? " listening" : ""}`}
+                onClick={dictation.isListening ? dictation.stop : dictation.start}
+                aria-pressed={dictation.isListening}
+                aria-label={
+                  dictation.isListening ? "Stop voice input" : "Start voice input"
+                }
+                title={
+                  dictation.isListening ? "Stop voice input" : "Start voice input"
+                }
+              >
+                {dictation.isListening ? "● Listening…" : "🎤"}
+              </button>
+            )}
             <button className="sendBtn" type="submit">
               Send
             </button>
