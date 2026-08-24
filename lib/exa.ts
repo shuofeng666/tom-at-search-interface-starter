@@ -293,10 +293,6 @@ export function buildSearchQuery(needProfile: NeedProfile, customQuery?: string)
 export function detectSourceType(url: string): CandidateSourceType {
   const lower = url.toLowerCase();
 
-  if (isTomProjectUrl(url) || isTomDomainUrl(url)) {
-    return "TOM project";
-  }
-
   if (lower.includes("instructables.com")) return "DIY project";
 
   if (
@@ -304,8 +300,20 @@ export function detectSourceType(url: string): CandidateSourceType {
     lower.includes("printables.com") ||
     lower.includes("github.com") ||
     lower.includes("atmakers.org") ||
-    lower.includes("makersmakingchange.com")
+    lower.includes("makersmakingchange.com") ||
+    isTomProjectUrl(url) ||
+    isTomDomainUrl(url)
   ) {
+    // TOM's own site, but reached via the live Exa web-search layer, not the
+    // curated CSV catalog (lib/tom.ts hardcodes sourceType: "TOM project"
+    // for CSV rows, completely separate from this function). Deliberately
+    // NOT "TOM project" here - isTomCandidate() in page.tsx groups by
+    // sourceType, and mixing web-search hits into that section made it
+    // impossible to tell whether this layer was contributing anything at
+    // all (it silently blended into the CSV's 20 results). Filed under
+    // "Other related work" instead so a live-search hit is visible on its
+    // own, distinguishable from the CSV - temporary, for verifying this
+    // layer actually works before deciding whether to fold it back in.
     return "open-source project";
   }
 
