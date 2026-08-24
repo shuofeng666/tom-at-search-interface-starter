@@ -119,29 +119,49 @@ export async function fetchPrioritizedPool({
     commercialDomains
   });
 
-  const fetchDomainGroup = async (domains: string[], perDomain: number) => {
-    if (!domains.length || perDomain <= 0) return [];
+  // One Exa call per configured domain, across all three groups. That's
+  // grown past what used to be a handful of domains to 10+ now that more
+  // sources have been added - firing them all via unbounded Promise.all (as
+  // three separate groups previously did) crossed Exa's 10-requests/second
+  // plan limit, and a rate-limited call just silently returns [] for that
+  // domain (searchExaProjects logs the error and swallows it) rather than
+  // failing loudly. Run every domain through one shared concurrency-limited
+  // queue instead, so no matter how many domains get added later, no more
+  // than EXA_MAX_CONCURRENT_REQUESTS calls are ever in flight at once.
+  const EXA_MAX_CONCURRENT_REQUESTS = 6;
 
-    const groups = await Promise.all(
-      domains.map((domain) =>
-        searchExaProjects({
-          query,
-          needProfile,
-          numResults: perDomain,
-          includeDomainsOverride: [domain]
-        })
-      )
-    );
+  const domainJobs = [
+    ...primaryDomains.map((domain) => ({ domain, perDomain: primaryPerDomain })),
+    ...secondaryDomains.map((domain) => ({ domain, perDomain: secondaryPerDomain })),
+    ...commercialDomains.map((domain) => ({ domain, perDomain: commercialPerDomain }))
+  ];
 
-    return interleave(groups);
-  };
+  const domainResults = await mapWithConcurrencyLimit(
+    domainJobs,
+    EXA_MAX_CONCURRENT_REQUESTS,
+    ({ domain, perDomain }) =>
+      perDomain > 0
+        ? searchExaProjects({
+            query,
+            needProfile,
+            numResults: perDomain,
+            includeDomainsOverride: [domain]
+          })
+        : Promise.resolve([])
+  );
 
-  const [primaryResultsRaw, secondaryResults, commercialResults] =
-    await Promise.all([
-      fetchDomainGroup(primaryDomains, primaryPerDomain),
-      fetchDomainGroup(secondaryDomains, secondaryPerDomain),
-      fetchDomainGroup(commercialDomains, commercialPerDomain)
-    ]);
+  const primaryResultsRaw = interleave(
+    domainResults.slice(0, primaryDomains.length)
+  );
+  const secondaryResults = interleave(
+    domainResults.slice(
+      primaryDomains.length,
+      primaryDomains.length + secondaryDomains.length
+    )
+  );
+  const commercialResults = interleave(
+    domainResults.slice(primaryDomains.length + secondaryDomains.length)
+  );
 
   const primaryResults = primaryResultsRaw.filter((result) =>
     isTomProjectUrl(result.url || "")
@@ -224,6 +244,32 @@ function normalizeUrlKey(value: string) {
   } catch {
     return value.trim().toLowerCase();
   }
+}
+
+// Runs `fn` over `items` with at most `limit` calls in flight at once,
+// preserving input order in the returned array regardless of which call
+// finishes first. Used to keep total simultaneous Exa requests under its
+// per-second rate limit without capping how many domains can be searched.
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await fn(items[currentIndex]);
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return results;
 }
 
 // Round-robin merge: [a1,a2], [b1,b2,b3], [c1] -> a1,b1,c1,a2,b2,b3
