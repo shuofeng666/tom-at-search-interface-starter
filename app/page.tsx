@@ -1109,7 +1109,16 @@ function IntakeScreen({
   // The agent's own "ready" judgment is a quality signal, not a gate — once
   // the user has answered at least once, let them jump to search whenever
   // they want. Q&A keeps going if they'd rather answer more first.
-  const showSearchAction = userTurnCount >= 1;
+  //
+  // hasUsableSearchSeed is a separate, harder floor: activity/problem still
+  // "unknown activity"/"unknown problem" (the emptyNeedProfile defaults)
+  // means there's nothing concrete to search or evaluate against yet.
+  // Searching anyway doesn't error - it silently produces confusing
+  // results, since every candidate's evaluation ends up reasoning about an
+  // "unknown" need instead of a real one. This was written but never
+  // actually wired into showSearchAction, so the "Search now" escape hatch
+  // had no real floor under it - fixed by requiring both.
+  const showSearchAction = userTurnCount >= 1 && hasUsableSearchSeed(needProfile);
 
   if (!messages.length) {
     return (
@@ -1256,6 +1265,13 @@ function IntakeScreen({
             )}
           </div>
         </form>
+
+        {userTurnCount >= 1 && !showSearchAction && (
+          <p className="small searchGateHint">
+            Tell us what activity is difficult before searching — search
+            results won't be useful yet.
+          </p>
+        )}
       </div>
     </section>
   );

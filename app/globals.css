@@ -596,6 +596,11 @@ a {
   line-height: 1.45;
 }
 
+.searchGateHint {
+  margin: 10px 4px 0;
+  font-size: 12px;
+}
+
 .candidateDetail h2 {
   margin-bottom: 8px;
 }
