@@ -1,4 +1,4 @@
-# TOM Assistive Technology Search Interface
+# TOM AT Search Engine
 
 This is a prototype interface for TOM assistive technology search and review.
 
