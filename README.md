@@ -21,13 +21,26 @@ cp .env.example .env.local
 npm run dev
 ```
 
-## TOM project catalog
+## TOM project search
 
-TOM project search reads `data/tom-solutions.csv` directly — no live API or
-API key involved. It's parsed once, cached in memory, and every row is
-scored locally against the intake need profile, so TOM results are reliable
-and don't depend on an external endpoint being up or guessing the right
-keyword.
+TOM results come from two sources, in priority order:
+
+1. **Live search** of tomglobal.org itself (via Exa, `EXA_PRIMARY_DOMAINS`)
+   — the default, preferred source. Most TOM results a user actually sees
+   come from here.
+2. **`data/tom-solutions.csv`**, a static snapshot TOM provided, scored
+   locally against the intake need profile — used only as a backfill, when
+   live search alone doesn't turn up enough TOM results to satisfy the
+   app's minimum-visible-TOM-results guarantee. No API key or live
+   endpoint involved for this part, so it's a reliable floor even on a day
+   live search comes up short.
+
+This wasn't always the arrangement: live search of tomglobal.org used to
+be unreliable, which is why the CSV catalog was built as the *primary*
+source in the first place. It's kept as a fallback now rather than
+removed, in case that regresses again — see `HANDOFF.md` for the history.
+
+### Refreshing the CSV fallback
 
 Expected columns:
 
@@ -35,11 +48,11 @@ Expected columns:
 Solution Name, Link, Summary, Who, Why, How, What, Category, Tags
 ```
 
-This is a snapshot, not a live feed: new TOM projects won't show up in
-search until this file is refreshed. To update it, ask TOM for a fresh
+This is a snapshot, not a live feed. To update it, ask TOM for a fresh
 export in the same column format, replace `data/tom-solutions.csv`, and
 update the date in `data/tom-solutions.meta.json` — the results page shows
-that date next to the TOM results so staff know how fresh the data is.
+that date next to TOM results, so staff know how fresh a fallback result
+actually is.
 
 ### TOM project photos
 
@@ -54,14 +67,40 @@ bug (TOM cards silently had no photos) rather than a missing config
 value — see `.env.example` for the value and `HANDOFF.md` for the full
 story.
 
-### "Download TOM request"
+## External sources
 
-Candidates whose evaluation pathway suggests TOM staff involvement (needs
-adaptation, maker team review, possible new TOM challenge, or needs more
-information) show a "Download TOM request (.txt)" button. It downloads a
-plain-text report (full need profile + the candidate's fit assessment)
-instead of opening a `mailto:` link — mailto depends on the browser having
-a default mail app configured, which often isn't true on shared/work
-computers, so it silently does nothing there. The downloaded file can be
-attached to an email, pasted into Slack, or added to a ticket, whatever
-the reviewer's actual workflow is.
+Beyond TOM, results also come from Exa searches of open-source/DIY and
+commercial assistive-tech sites — `EXA_SECONDARY_DOMAINS` and
+`EXA_COMMERCIAL_DOMAINS` in `.env.example`, currently Instructables,
+Thingiverse, Printables, GitHub, ATMakers, and Makers Making Change
+(open-source/DIY), plus Amazon, Walmart, Etsy, and Enabling Devices
+(commercial). Adding a domain to these lists isn't enough on its own for
+it to display with the right label on a card — see the `detectSourceType`
+comment in `lib/exa.ts`.
+
+If the same solution shows up on both TOM and one of these external
+sites (e.g. also cross-posted to Printables), only the TOM version is
+shown.
+
+## "Request a new assistive device"
+
+At the bottom of the results screen, a "Can't find what you're looking
+for? Request a new assistive device" link points to TOM's Monday.com
+intake form — a fallback for when nothing found is a good match. It's a
+fixed URL in `app/page.tsx`, not configurable via an env var.
+
+## Voice input
+
+Both intake chat inputs (the initial prompt and the ongoing chat) have a
+mic button that transcribes speech into the text field, using the
+browser's built-in Web Speech API — no extra dependency or API key
+involved. It's dictation, not a live conversation: press it, say one
+thing, review the transcript, then send as normal. Only appears in
+browsers that support it (Chrome, Edge, Safari); hidden entirely on
+Firefox, which doesn't.
+
+## Branding
+
+The TOM (Tikkun Olam Makers) logo lives at `public/tom-logo.png` and
+shows in the app header. Its approximate brand colors are available as
+the `--tom-blue`/`--tom-orange` CSS variables in `app/globals.css`.
