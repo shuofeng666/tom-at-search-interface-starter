@@ -963,6 +963,7 @@ type SpeechRecognitionLike = {
   lang: string;
   interimResults: boolean;
   maxAlternatives: number;
+  continuous: boolean;
   start: () => void;
   stop: () => void;
   onresult: ((event: SpeechRecognitionResultLike) => void) | null;
@@ -1015,10 +1016,26 @@ function useSpeechDictation(onResult: (text: string) => void) {
         : "en-US";
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
+    recognition.continuous = false;
+
+    // Some browser/OS speech engines keep firing onresult with growing or
+    // repeated transcripts instead of cleanly stopping after one phrase
+    // (seen in testing: "can you" landing 20 times over). `continuous:
+    // false` alone doesn't reliably prevent that on every implementation, so
+    // this session only ever accepts the FIRST result it sees, then force-
+    // stops the recognizer immediately rather than trusting it to end on
+    // its own.
+    let resultHandled = false;
 
     recognition.onresult = (event) => {
+      if (resultHandled) return;
+
       const transcript = event.results[0]?.[0]?.transcript;
-      if (transcript) onResult(transcript);
+      if (!transcript) return;
+
+      resultHandled = true;
+      onResult(transcript.trim());
+      recognition.stop();
     };
     recognition.onerror = () => setIsListening(false);
     recognition.onend = () => setIsListening(false);
