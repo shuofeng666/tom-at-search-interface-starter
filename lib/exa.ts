@@ -302,7 +302,9 @@ export function detectSourceType(url: string): CandidateSourceType {
   if (
     lower.includes("thingiverse.com") ||
     lower.includes("printables.com") ||
-    lower.includes("github.com")
+    lower.includes("github.com") ||
+    lower.includes("atmakers.org") ||
+    lower.includes("makersmakingchange.com")
   ) {
     return "open-source project";
   }
@@ -311,7 +313,8 @@ export function detectSourceType(url: string): CandidateSourceType {
     lower.includes("amazon.") ||
     lower.includes("walmart.") ||
     lower.includes("etsy.") ||
-    lower.includes("aliexpress.")
+    lower.includes("aliexpress.") ||
+    lower.includes("enablingdevices.com")
   ) {
     return "commercial product";
   }
