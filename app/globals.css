@@ -10,6 +10,24 @@
   --yellow: #ca8a04;
   --red: #dc2626;
   --shadow: 0 24px 80px rgba(15, 23, 42, 0.1);
+  /* Approximate colors from the TOM (Tikkun Olam Makers) logo, for brand
+     accents (focus rings, section markers) - deliberately separate from
+     --blue/--green above, which are already used for unrelated functional
+     meanings (info tone, generic success/TOM-source tone) that shouldn't
+     shift just because the logo was added. */
+  --tom-blue: #159bd6;
+  --tom-orange: #f0592b;
+}
+
+/* Keyboard focus gets a visible, on-brand ring everywhere - previously
+   relied entirely on each browser's own default outline, which looked
+   inconsistent against this app's rounded, soft-shadow visual language.
+   :focus-visible (not :focus) so mouse/touch clicks don't get an outline,
+   only actual keyboard navigation does. */
+:focus-visible {
+  outline: 2px solid var(--tom-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 * {
@@ -928,9 +946,22 @@ a {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Small brand-colored marker on the TOM section heading specifically
+   (always the first .resultsSection - see the TOM-results-stack-on-top
+   layout) so the two stacked sections read as more distinct at a glance,
+   not just two same-weight gray labels. */
+.resultsStack > .resultsSection:first-child .resultsColumnTitle::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tom-blue);
+  flex-shrink: 0;
 }
 
 .snapshotBadge {
@@ -953,7 +984,7 @@ a {
   overflow: hidden;
   background: white;
   cursor: pointer;
-  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   animation: cardEnter 0.45s ease-out backwards;
 }
 
@@ -980,6 +1011,12 @@ a {
 }
 .projectCard:hover {
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.1);
+  transform: translateY(-2px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .projectCard:hover {
+    transform: none;
+  }
 }
 .projectCard.active {
   border-color: #93c5fd;
