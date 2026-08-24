@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   CandidateProject,
   ChatMessage,
@@ -41,6 +48,21 @@ const PAGE_SIZE = 10;
 const MIN_TOTAL_VISIBLE_TARGET = 6;
 const MIN_TOM_VISIBLE_TARGET = 4;
 const MAX_AUTO_SCORE_BATCHES = 2;
+
+// Matches the @media breakpoint in globals.css that collapses .workspaceGrid
+// to a single column - the resizable divider only makes sense above it.
+const DESKTOP_LAYOUT_QUERY = "(min-width: 1181px)";
+const DETAIL_PANEL_WIDTH_KEY = "tom-detail-panel-width-v1";
+const DEFAULT_DETAIL_PANEL_WIDTH = 400;
+const MIN_DETAIL_PANEL_WIDTH = 300;
+const MAX_DETAIL_PANEL_WIDTH = 640;
+
+function clampDetailPanelWidth(width: number) {
+  return Math.min(
+    MAX_DETAIL_PANEL_WIDTH,
+    Math.max(MIN_DETAIL_PANEL_WIDTH, width),
+  );
+}
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -1161,6 +1183,62 @@ function ReviewScreen({
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sourceTypeFilter, setSourceTypeFilter] = useState("all");
 
+  // Detail-panel width, resizable by dragging .panelDivider. Only applied on
+  // desktop widths - below DESKTOP_LAYOUT_QUERY the CSS media query collapses
+  // .workspaceGrid to a single column, and an inline style would override
+  // that (inline styles beat @media rules), so the divider/inline width are
+  // skipped entirely on narrow screens rather than fighting the stylesheet.
+  const [detailPanelWidth, setDetailPanelWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return DEFAULT_DETAIL_PANEL_WIDTH;
+    const raw = window.localStorage.getItem(DETAIL_PANEL_WIDTH_KEY);
+    const parsed = raw ? Number(raw) : NaN;
+    return Number.isFinite(parsed)
+      ? clampDetailPanelWidth(parsed)
+      : DEFAULT_DETAIL_PANEL_WIDTH;
+  });
+  const [isDesktopLayout, setIsDesktopLayout] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.matchMedia(DESKTOP_LAYOUT_QUERY).matches;
+  });
+  const [isDraggingDivider, setIsDraggingDivider] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia(DESKTOP_LAYOUT_QUERY);
+    const update = () => setIsDesktopLayout(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      DETAIL_PANEL_WIDTH_KEY,
+      String(detailPanelWidth),
+    );
+  }, [detailPanelWidth]);
+
+  function handleDividerPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDraggingDivider(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.style.userSelect = "none";
+  }
+
+  function handleDividerPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!isDraggingDivider) return;
+    // Dragging left (negative movementX) widens the right-hand detail
+    // panel; dragging right narrows it.
+    setDetailPanelWidth((previous) =>
+      clampDetailPanelWidth(previous - event.movementX),
+    );
+  }
+
+  function handleDividerPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    setIsDraggingDivider(false);
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    document.body.style.userSelect = "";
+  }
+
   const tomCategories = useMemo(
     () =>
       Array.from(
@@ -1224,7 +1302,16 @@ function ReviewScreen({
         </div>
       </header>
 
-      <div className="workspaceGrid">
+      <div
+        className="workspaceGrid"
+        style={
+          isDesktopLayout
+            ? {
+                gridTemplateColumns: `minmax(0, 1fr) 10px ${detailPanelWidth}px`,
+              }
+            : undefined
+        }
+      >
         <section className="panel resultsPanel">
           <h2>Related projects</h2>
           <p className="small resultsHint">Tap a card for details.</p>
@@ -1354,6 +1441,18 @@ function ReviewScreen({
             </button>
           )}
         </section>
+
+        {isDesktopLayout && (
+          <div
+            className={`panelDivider${isDraggingDivider ? " dragging" : ""}`}
+            onPointerDown={handleDividerPointerDown}
+            onPointerMove={handleDividerPointerMove}
+            onPointerUp={handleDividerPointerUp}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize panels"
+          />
+        )}
 
         <aside className="panel detailPanel">
           {selectedCandidate ? (

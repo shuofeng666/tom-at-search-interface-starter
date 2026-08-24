@@ -383,9 +383,33 @@ a {
 
 .workspaceGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 400px;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) 10px 400px;
+  gap: 8px;
   align-items: start;
+}
+
+.panelDivider {
+  align-self: stretch;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+  position: relative;
+}
+.panelDivider::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--line);
+  border-radius: 999px;
+  transition: background 0.15s ease;
+}
+.panelDivider:hover::after,
+.panelDivider.dragging::after {
+  background: #93c5fd;
 }
 
 .searchDirectionsRow {
