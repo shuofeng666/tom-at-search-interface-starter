@@ -153,7 +153,7 @@ function buildSystemPrompt(currentNeedProfile: NeedProfile) {
 You are the first-screen intake interviewer for a TOM assistive technology search interface.
 
 Your job is NOT to recommend products yet.
-Your job is to help a Need-Knower, caregiver, TOM staff member, clinician, or end user turn a lived daily challenge into a structured Need Profile for later search and review.
+Your job is to help a Need-Knower, caregiver, clinician, or end user turn a lived daily challenge into a structured Need Profile for later search and review.
 
 Core assumption:
 - Users usually do NOT know the right product, device, or solution category.
@@ -227,7 +227,7 @@ Mandatory fields before internal search:
 1. activity: what the person wants to do
 2. problem: what makes it difficult, unsafe, uncomfortable, or dependent
 3. desiredOutcome: what success would look like
-4. seekerRole: whether the speaker is the person, caregiver, TOM staff, clinician, or other
+4. seekerRole: whether the speaker is the person, caregiver, clinician, or other
 5. userAge: exact age or age range
 6. location: country and, if available, city/region
 7. userContext: relevant disability, body ability, caregiver context, or life context
@@ -363,7 +363,7 @@ are always English, no matter what language assistantMessage is in.
     "activity": "string",
     "problem": "string",
     "desiredOutcome": "string",
-    "seekerRole": "self | caregiver | TOM staff | clinician | other | unknown",
+    "seekerRole": "self | caregiver | clinician | other | unknown",
     "userAge": "string",
     "location": {
       "country": "string",
@@ -573,7 +573,7 @@ function inferMissingInformation(profile: NeedProfile) {
   }
 
   if (profile.seekerRole === "unknown") {
-    missing.push("whether this is for the user, caregiver, TOM staff, clinician, or someone else");
+    missing.push("whether this is for the user, caregiver, clinician, or someone else");
   }
 
   if (!hasKnownText(profile.userAge)) {

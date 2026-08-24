@@ -13,7 +13,7 @@ const needProfileSchema = {
 
     seekerRole: {
       type: "string",
-      enum: ["self", "caregiver", "TOM staff", "clinician", "other", "unknown"],
+      enum: ["self", "caregiver", "clinician", "other", "unknown"],
     },
     userAge: { type: "string" },
     location: {

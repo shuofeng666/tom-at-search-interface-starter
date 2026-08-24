@@ -72,7 +72,7 @@ Return ONLY valid JSON:
   "activity": "string",
   "problem": "string",
   "desiredOutcome": "string",
-  "seekerRole": "self | caregiver | TOM staff | clinician | other | unknown",
+  "seekerRole": "self | caregiver | clinician | other | unknown",
   "userAge": "string",
   "location": {
     "country": "string",
