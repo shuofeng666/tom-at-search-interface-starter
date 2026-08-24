@@ -93,116 +93,6 @@ function needsTomTeamLabel(candidate: CandidateProject) {
   }
 }
 
-// Every field TOM staff would otherwise have to click into the app to see —
-// this is meant to work as a standalone report, not just a pointer back to
-// the tool, since the point is giving them enough context without it. Empty/
-// "not applicable" fields are skipped rather than shown blank.
-function buildNeedSummaryLines(needProfile: NeedProfile): string[] {
-  const location = [needProfile.location?.cityOrRegion, needProfile.location?.country]
-    .filter(Boolean)
-    .join(", ");
-
-  const listField = (label: string, values: string[]) =>
-    values.length ? `${label}: ${values.join("; ")}` : "";
-
-  return [
-    `Activity: ${needProfile.activity}`,
-    `Problem: ${needProfile.problem}`,
-    `Desired outcome: ${needProfile.desiredOutcome}`,
-    [needProfile.userAge, needProfile.seekerRole].filter(Boolean).length
-      ? `Age / role: ${[needProfile.userAge, needProfile.seekerRole].filter(Boolean).join(" / ")}`
-      : "",
-    location ? `Location: ${location}` : "",
-    listField("Body function", needProfile.bodyFunction),
-    listField("Current devices", needProfile.currentDevices),
-    listField("Environment", needProfile.environment),
-    listField("Must have", needProfile.mustHave),
-    listField("Must avoid", needProfile.mustAvoid),
-    listField("Safety concerns", needProfile.safetyConcerns),
-    listField("Preferences", needProfile.preferences),
-  ].filter((line) => line !== "");
-}
-
-function buildEvaluationSummaryLines(candidate: CandidateProject): string[] {
-  const evaluation = candidate.evaluation;
-  if (!evaluation) return [];
-
-  const listField = (label: string, values: string[]) =>
-    values.length ? `${label}: ${values.join("; ")}` : "";
-
-  return [
-    `Overall fit score: ${evaluation.overallScore.toFixed(1)}/3`,
-    listField("Matches", evaluation.matchedCriteria),
-    listField("Gaps / mismatches", evaluation.unmatchedCriteria),
-    listField("Missing information", evaluation.missingInformation),
-    listField("Risk flags", evaluation.riskFlags),
-    `Cost: ${costLabel(candidate)}`,
-  ].filter((line) => line !== "");
-}
-
-// A plain-text report the user downloads and sends however they like
-// (email, Slack, pasted into a ticket) — not a mailto link, since that
-// depends on the browser having a default mail app configured, which often
-// isn't true on shared/work computers and just silently does nothing.
-//
-// Each section's own lines are filtered for emptiness independently, then
-// sections are joined with a blank line between them — filtering the whole
-// thing at once would eat the intentional blank-line separators along with
-// the genuinely empty computed fields.
-function buildTomTeamReportText(
-  candidate: CandidateProject,
-  needProfile: NeedProfile,
-): string {
-  const sections: string[][] = [
-    [
-      `TOM team review request: ${candidate.title}`,
-      `A search turned up a possible match that needs TOM's help to evaluate or adapt.`,
-    ],
-    [`=== Need ===`, ...buildNeedSummaryLines(needProfile)],
-    [
-      `=== Project ===`,
-      `Project: ${candidate.title}`,
-      `Link: ${candidate.url}`,
-      `Source: ${formatSourceLabel(candidate.source)} (${candidate.sourceType})`,
-    ],
-    [
-      `=== Fit assessment ===`,
-      ...buildEvaluationSummaryLines(candidate),
-      `Why this needs TOM: ${candidate.evaluation?.pathwayReason || "See fit assessment on the project page."}`,
-    ],
-  ];
-
-  return sections
-    .map((section) => section.filter((line) => line !== "").join("\n"))
-    .filter((section) => section !== "")
-    .join("\n\n");
-}
-
-function buildTomTeamReportFilename(candidate: CandidateProject): string {
-  const slug =
-    candidate.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "project";
-
-  return `tom-request-${slug}.txt`;
-}
-
-function downloadTextFile(filename: string, content: string) {
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-
-  URL.revokeObjectURL(url);
-}
-
 function normalizeTitleForDedupe(title: string): string {
   return title
     .toLowerCase()
@@ -1308,10 +1198,11 @@ function ReviewScreen({
         </button>
 
         <div>
-          <h1>Search review</h1>
+          <h1>Search results</h1>
           <p>
-            Check whether these projects match the need. Add a detail if
-            something feels off, before preparing a summary.
+            Here are some projects that might fit your needs. You can click
+            on a project to learn more, compare a few results or edit your
+            search.
           </p>
         </div>
 
@@ -1474,7 +1365,7 @@ function ReviewScreen({
               onReject={(reason) => rejectCandidate(selectedCandidate, reason)}
             />
           ) : (
-            <p className="small">Select a candidate to inspect details.</p>
+            <p className="small">Select a project to learn more.</p>
           )}
         </aside>
       </div>
@@ -1485,6 +1376,17 @@ function ReviewScreen({
           <ComparisonView candidates={savedCandidates} />
         </section>
       )}
+
+      <p className="newDeviceRequest">
+        Can't find what you're looking for?{" "}
+        <a
+          href="https://forms.monday.com/forms/25b088ad345c4d5d0d66ccdb178d1acb?r=use1"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Request a new assistive device
+        </a>
+      </p>
     </section>
   );
 }
@@ -1754,11 +1656,7 @@ function OutputScreen({
           <h3>Options to discuss</h3>
           <div className="cards oneCol">
             {displayCandidates.map((candidate) => (
-              <UserFacingCard
-                key={candidate.id}
-                candidate={candidate}
-                needProfile={needProfile}
-              />
+              <UserFacingCard key={candidate.id} candidate={candidate} />
             ))}
           </div>
 
@@ -1992,7 +1890,6 @@ function CandidateDetail({
 }) {
   const [reason, setReason] = useState(rejectionOptions[0].value);
   const evaluation = candidate.evaluation;
-  const needsTeam = needsTomTeamLabel(candidate);
 
   return (
     <article className="candidateDetail">
@@ -2071,21 +1968,6 @@ function CandidateDetail({
           <span>{costLabel(candidate)}</span>
         </div>
       </div>
-
-      {(needsTeam === "Yes" || needsTeam === "Maybe") && (
-        <button
-          type="button"
-          className="requestHelpBtn"
-          onClick={() =>
-            downloadTextFile(
-              buildTomTeamReportFilename(candidate),
-              buildTomTeamReportText(candidate, needProfile),
-            )
-          }
-        >
-          Download TOM request (.txt)
-        </button>
-      )}
 
       <ChipRow
         label="Matched needs"
@@ -2230,10 +2112,8 @@ function SummaryList({ title, items }: { title: string; items: string[] }) {
 
 function UserFacingCard({
   candidate,
-  needProfile,
 }: {
   candidate: CandidateProject;
-  needProfile: NeedProfile;
 }) {
   const needsTeam = needsTomTeamLabel(candidate);
 
@@ -2271,21 +2151,6 @@ function UserFacingCard({
         >
           Open original ↗
         </a>
-
-        {(needsTeam === "Yes" || needsTeam === "Maybe") && (
-          <button
-            type="button"
-            className="requestHelpBtn"
-            onClick={() =>
-              downloadTextFile(
-                buildTomTeamReportFilename(candidate),
-                buildTomTeamReportText(candidate, needProfile),
-              )
-            }
-          >
-            Download TOM request (.txt)
-          </button>
-        )}
       </div>
     </article>
   );
